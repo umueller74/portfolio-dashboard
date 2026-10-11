@@ -12,10 +12,19 @@
 <canvas id="chart" height="110"></canvas>
 <script src="/static/chart.umd.min.js"></script>
 <script>
+const tips = {{ markers.tooltips|tojson }};
+const marker = (label, key, color, style, rotation) => ({
+  label, data: {{ markers|tojson }}[key], borderColor: color, backgroundColor: color, showLine: false,
+  pointStyle: style, pointRadius: 7, pointHoverRadius: 9, pointRotation: rotation || 0, order: 0});
 new Chart(document.getElementById('chart'), {type:'line',
  data:{labels:{{ labels|tojson }},datasets:[
-  {label:'Value (EUR)',data:{{ values|tojson }},borderColor:'#2563eb',pointRadius:0,tension:.1},
-  {label:'Invested (EUR)',data:{{ invested|tojson }},borderColor:'#9ca3af',pointRadius:0,borderDash:[5,4]}]},
- options:{interaction:{mode:'index',intersect:false}}});
+  {label:'Value (EUR)',data:{{ values|tojson }},borderColor:'#2563eb',pointRadius:0,tension:.1,order:2},
+  {label:'Invested (EUR)',data:{{ invested|tojson }},borderColor:'#9ca3af',pointRadius:0,borderDash:[5,4],order:3},
+  marker('Savings plan buy','plan_buy','#16a34a','circle'),
+  marker('One-off buy','cash_buy','#ea580c','triangle'),
+  marker('Sell','sell','#dc2626','triangle',180)]},
+ options:{interaction:{mode:'index',intersect:false},
+  plugins:{legend:{labels:{usePointStyle:true}},
+   tooltip:{filter:(item)=>item.datasetIndex<2,callbacks:{afterBody:(items)=>tips[items[0].dataIndex]}}}}});
 </script>
 {% endif %}{% endblock %}

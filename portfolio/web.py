@@ -44,6 +44,21 @@ def _ctx(request: Request, **extra) -> dict:
     return {"last_ingest": last, "stale": last is None or age_h > STALE_AFTER_HOURS, **extra}
 
 
+def marker_series(markers: dict, labels: list[date], values: list[float]) -> dict:
+    """One array per marker category, aligned with the chart labels (value where a trade happened, else None),
+    plus the tooltip lines for each label."""
+    out: dict = {c: [] for c in services.MARKER_CATEGORIES}
+    out["tooltips"] = []
+    for day, value in zip(labels, values):
+        todays = markers.get(day, [])
+        present = {m.category for m in todays}
+        for c in services.MARKER_CATEGORIES:
+            out[c].append(value if c in present else None)
+        out["tooltips"].append([
+            f"{m.name}: {m.side} {_qty(m.quantity)} · {_eur(m.amount)} €" for m in todays])
+    return out
+
+
 @router.get("/healthz")
 async def healthz():
     return {"status": "ok"}
@@ -55,10 +70,13 @@ async def portfolio_page(request: Request, range: str = "1y"):
     today = date.today()
     ov = services.overview(conn, today)
     series = services.slice_range(services.value_series(conn), range, today)
+    days = [p.day for p in series]
+    values = [p.value for p in series]
+    markers = marker_series(services.trade_markers(conn, days), days, values)
     return templates.TemplateResponse(request, "portfolio.html", _ctx(
         request, ov=ov, range=range, ranges=RANGES, change=services.last_session_change(conn),
-        labels=[p.day.isoformat() for p in series], values=[p.value for p in series],
-        invested=[p.invested for p in series]))
+        labels=[d.isoformat() for d in days], values=values,
+        invested=[p.invested for p in series], markers=markers))
 
 
 @router.get("/etf")
