@@ -15,7 +15,8 @@ def test_portfolio_page_shows_totals_and_ranges(client):
     html = client.get("/?range=3m").text
     assert "550.00" in html and "+10.00" in html
     for key in ("1w", "1m", "3m", "6m", "1y", "all"):
-        assert f"range={key}" in html
+        assert f'data-range="{key}"' in html
+    assert 'id="pnlChart"' in html and 'id="valueChart"' in html
 
 
 def test_etf_list_and_detail(client):
@@ -38,3 +39,20 @@ def test_oversell_shows_banner_not_500(client):
 def test_stale_banner_when_last_ingest_old(client):
     client.post("/api/ingest", headers=AUTH, json=payload(fetched_at="2020-01-01T00:00:00+00:00"))
     assert 'class="stale"' in client.get("/").text
+
+
+def test_single_page_has_one_trades_table_with_a_button_per_etf(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin="IE0000000002"),
+                  trade("c", "SELL", "1", "50", "2026-03-05T10:00:00Z", isin="IE0000000002")],
+         quotes=[{"isin": ISIN, "price": "110", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
+    html = client.get("/").text
+    assert html.count("<table") == 1
+    assert 'data-isin="IE0000000002" title' in html and f'data-isin="{ISIN}" title' in html   # the sold-out ETF too
+    assert html.count("<th class=\"sort\"") == 10
+    assert html.index("2026-03-05") < html.index("2026-02-05")      # server-side default: newest first
+
+
+def test_unknown_range_falls_back_to_one_year(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
+    assert 'class="btn active" data-range="1y"' in client.get("/?range=bogus").text
