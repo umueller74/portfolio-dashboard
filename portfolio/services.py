@@ -223,3 +223,42 @@ def isin_detail(conn, isin: str) -> IsinDetail:
             detail.rows.append(TxRow(t, s.proceeds, None, _pct(s.realized, s.cost_basis), None, s.realized))
             detail.realized_total += s.realized
     return detail
+
+
+MARKER_CATEGORIES = ("plan_buy", "cash_buy", "sell")
+# A trade newer than the last chart point (its close is not in yet) still gets a marker on that point,
+# but only for a few days; older trades outside the chart's range are dropped.
+MARKER_GRACE_DAYS = 3
+
+
+@dataclass(frozen=True)
+class Marker:
+    category: str        # plan_buy | cash_buy | sell
+    isin: str
+    name: str
+    side: str
+    quantity: Decimal
+    amount: Decimal      # cash moved: cost incl. fee for a buy, proceeds net of fee for a sale
+
+
+def _category(t: Trade) -> str:
+    if t.side == "SELL":
+        return "sell"
+    return "plan_buy" if t.kind == "SAVINGS_PLAN" else "cash_buy"   # unknown kinds count as one-off buys
+
+
+def trade_markers(conn, days: list[date]) -> dict[date, list[Marker]]:
+    """Trades grouped by the chart day they belong to: the last chart day on or before the trade date."""
+    if not days:
+        return {}
+    days = sorted(days)
+    out: dict[date, list[Marker]] = {}
+    for t in load_trades(conn):
+        d = _day(t.executed_at)
+        i = bisect_right(days, d) - 1
+        if i < 0 or (i == len(days) - 1 and (d - days[i]).days > MARKER_GRACE_DAYS):
+            continue
+        gross = t.quantity * t.price
+        amount = gross + t.fee if t.side == "BUY" else gross - t.fee
+        out.setdefault(days[i], []).append(Marker(_category(t), t.isin, t.name, t.side, t.quantity, amount))
+    return out

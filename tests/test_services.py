@@ -13,9 +13,9 @@ def seed(client, trades, closes=(), quotes=()):
     assert r.status_code == 200
 
 
-def trade(id, side, qty, price, ts, fee="0", isin=ISIN):
+def trade(id, side, qty, price, ts, fee="0", isin=ISIN, kind="SINGLE"):
     sign = "-" if side == "BUY" else ""
-    return {"id": id, "isin": isin, "name": "ETF " + isin, "side": side, "kind": "SINGLE", "executed_at": ts,
+    return {"id": id, "isin": isin, "name": "ETF " + isin, "side": side, "kind": kind, "executed_at": ts,
             "quantity": qty, "price": price, "amount": f"{sign}{D(qty) * D(price)}", "fee": fee}
 
 
