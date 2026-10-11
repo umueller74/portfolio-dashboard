@@ -25,11 +25,11 @@
 {% if ov.error %}<div class="err">Data error: {{ ov.error }}</div>{% endif %}
 {% if not ov.holdings %}{% if not ov.error %}<p>No data yet.</p>{% endif %}{% else %}
 <div class="cards">
- <div class="card key"><span>Value</span><b id="c-value">{{ cards[range].value }}</b><small id="c-value_sub">{{ cards[range].value_sub }}</small></div>
- <div class="card key"><span>Invested</span><b id="c-invested">{{ cards[range].invested }}</b><small id="c-invested_sub">{{ cards[range].invested_sub }}</small></div>
- <div class="card"><span>Profit / Loss</span><b id="c-pnl" class="{{ 'pos' if cards[range].pnl_pos else 'neg' }}">{{ cards[range].pnl }}</b><small id="c-pnl_sub">{{ cards[range].pnl_sub }}</small></div>
- <div class="card"><span>XIRR</span><b id="c-xirr">{{ cards[range].xirr }}</b></div>
- <div class="card"><span>Last session</span><b>{% if change %}{{ change[0]|signed }} € ({{ change[1]|signed }} %){% else %}n/a{% endif %}</b></div>
+ <div class="card key"><span>Value</span><b id="c-value">{{ cards[''][range].value }}</b><small id="c-value_sub">{{ cards[''][range].value_sub }}</small></div>
+ <div class="card key"><span>Invested</span><b id="c-invested">{{ cards[''][range].invested }}</b><small id="c-invested_sub">{{ cards[''][range].invested_sub }}</small></div>
+ <div class="card"><span>Profit / Loss</span><b id="c-pnl" class="{{ 'pos' if cards[''][range].pnl_pos else 'neg' }}">{{ cards[''][range].pnl }}</b><small id="c-pnl_sub">{{ cards[''][range].pnl_sub }}</small></div>
+ <div class="card"><span>XIRR</span><b id="c-xirr">{{ cards[''][range].xirr }}</b></div>
+ <div class="card"><span>Last session</span><b id="c-session">{{ cards[''][range].session }}</b></div>
 </div>
 
 <div class="bar" id="ranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</div>
@@ -155,8 +155,8 @@ function applyRange() {
     ch.update();
   }
   document.querySelectorAll('#ranges .btn').forEach(b => b.classList.toggle('active', b.dataset.range === rangeKey));
-  const c = D.cards[rangeKey];
-  for (const k of ['value', 'value_sub', 'invested', 'invested_sub', 'pnl', 'pnl_sub', 'xirr']) document.getElementById('c-' + k).textContent = c[k];
+  const c = D.cards[isin][rangeKey];
+  for (const k of ['value', 'value_sub', 'invested', 'invested_sub', 'pnl', 'pnl_sub', 'xirr', 'session']) document.getElementById('c-' + k).textContent = c[k];
   document.getElementById('c-pnl').className = c.pnl_pos ? 'pos' : 'neg';
   history.replaceState(null, '', '?range=' + rangeKey);
 }

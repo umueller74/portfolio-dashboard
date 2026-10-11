@@ -67,23 +67,37 @@ def etf_tabs(conn, ov) -> list[dict]:
     return [{"isin": i, "name": names[i], "rows": services.isin_detail(conn, i).rows} for i in held + others]
 
 
-def card_texts(conn, ov, today: date) -> dict:
-    """The info boxes' texts for every range, so the range buttons can swap them without a reload."""
-    out: dict = {}
-    if ov.error or not ov.holdings:
-        return out
+def _card_texts_for(conn, ov, today: date, isin: str | None) -> dict:
+    series = services.value_series(conn, isin)
+    change = services.last_session_change(conn, isin)
+    session = "n/a" if change is None else f"{_signed(change[0])} € ({_signed(change[1])} %)"
+    out = {}
     for key in RANGES:
-        st = services.range_stats(conn, ov, key, today)
+        st = services.range_stats(conn, ov, key, today, isin, series)
         out[key] = {
-            "value": f"{_eur(ov.total_value)} €",
+            "value": f"{_eur(ov.total_value if isin is None else _held(ov, isin, 'value'))} €",
             "value_sub": "" if st.value_delta is None else f"{_signed(st.value_delta)} € in range",
-            "invested": f"{_eur(ov.total_cost)} €",
+            "invested": f"{_eur(ov.total_cost if isin is None else _held(ov, isin, 'cost'))} €",
             "invested_sub": "" if st.invested_delta is None else f"{_signed(st.invested_delta)} € in range",
             "pnl": f"{_signed(st.pnl_delta)} €" + ("" if st.pnl_pct is None else f" ({_signed(st.pnl_pct)} %)"),
             "pnl_sub": f"unrealized {_signed(st.unrealized)} · realized {_signed(st.realized)}",
             "pnl_pos": st.pnl_delta >= 0,
-            "xirr": "n/a" if st.xirr is None else f"{st.xirr * 100:+.2f} %"}
+            "xirr": "n/a" if st.xirr is None else f"{st.xirr * 100:+.2f} %",
+            "session": session}
     return out
+
+
+def _held(ov, isin: str, attr: str):
+    h = next((x for x in ov.holdings if x.isin == isin), None)
+    return getattr(h, attr) if h else Decimal(0)
+
+
+def card_texts(conn, ov, today: date, isins: list[str]) -> dict:
+    """The info boxes' texts per view ("" = whole portfolio, else an ISIN) and range, so the buttons can
+    swap them without a reload."""
+    if ov.error or not ov.holdings:
+        return {}
+    return {i: _card_texts_for(conn, ov, today, i or None) for i in ["", *isins]}
 
 
 def view_data(conn, isin: str | None) -> dict:
@@ -112,7 +126,7 @@ async def portfolio_page(request: Request, range: str = "1y"):
     return templates.TemplateResponse(request, "portfolio.html", _ctx(
         request, ov=ov, range=range if range in RANGES else "1y", ranges=RANGES,
         range_days=services.RANGE_DAYS, today=today.isoformat(),
-        change=services.last_session_change(conn), tabs=tabs, views=views, cards=card_texts(conn, ov, today)))
+        tabs=tabs, views=views, cards=card_texts(conn, ov, today, [t["isin"] for t in tabs])))
 
 
 @router.get("/etf")

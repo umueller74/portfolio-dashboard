@@ -131,3 +131,18 @@ def test_range_stats_include_realized_profit(client):
     assert st.realized == D(119)                                # 4 * 130 - 1 fee - 4 * 100
     assert st.pnl_delta == D(179)
     assert services.range_stats(conn, ov, "1w", today).realized == D(0)   # the sale is outside the last week
+
+
+def test_range_stats_for_one_etf_ignore_the_others(client):
+    today = date(2026, 10, 11)
+    seed(client, [trade("a", "BUY", "10", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "5", "20", "2026-01-05T11:00:00Z", isin="IE2"),
+                  trade("c", "SELL", "5", "30", "2026-02-05T10:00:00Z", isin="IE2")],
+         closes=[{"isin": ISIN, "day": "2026-01-05", "price": "100"}, {"isin": ISIN, "day": "2026-10-09", "price": "110"}],
+         quotes=[{"isin": ISIN, "price": "110", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
+    conn = client.app.state.conn
+    ov = services.overview(conn, today)
+    one = services.range_stats(conn, ov, "all", today, ISIN)
+    assert (one.unrealized, one.realized) == (D(100), D(0))
+    sold = services.range_stats(conn, ov, "all", today, "IE2")          # sold out: all profit is realized
+    assert (sold.unrealized, sold.realized) == (D(0), D(50))
