@@ -1,3 +1,4 @@
+from portfolio import services
 from tests.conftest import AUTH, payload
 from tests.test_services import ISIN, seed, trade
 
@@ -49,10 +50,23 @@ def test_single_page_has_one_trades_table_with_a_button_per_etf(client):
     html = client.get("/").text
     assert html.count("<table") == 1
     assert 'data-isin="IE0000000002" title' in html and f'data-isin="{ISIN}" title' in html   # the sold-out ETF too
-    assert html.count("<th class=\"sort\"") == 10
+    assert html.count("<th class=\"sort\"") == 11
     assert html.index("2026-03-05") < html.index("2026-02-05")      # server-side default: newest first
+    assert 'class="btn active" data-isin=""' in html                # Overview is the default selection
 
 
 def test_unknown_range_falls_back_to_one_year(client):
     seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
     assert 'class="btn active" data-range="1y"' in client.get("/?range=bogus").text
+
+
+def test_per_etf_series_only_use_that_etfs_trades(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-06T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-01-06T11:00:00Z", isin="IE0000000002")],
+         closes=[{"isin": ISIN, "day": "2026-01-06", "price": "110"},
+                 {"isin": "IE0000000002", "day": "2026-01-06", "price": "60"}])
+    one = services.value_series(client.app.state.conn, ISIN)
+    assert [(p.value, p.invested, p.price) for p in one] == [(550.0, 500.0, 110.0)]
+    assert services.value_series(client.app.state.conn)[0].value == 610.0
+    m = services.trade_markers(client.app.state.conn, [p.day for p in one], ISIN)
+    assert [x.isin for ms in m.values() for x in ms] == [ISIN]
