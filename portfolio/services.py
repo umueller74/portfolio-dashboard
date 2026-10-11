@@ -123,15 +123,18 @@ class SeriesPoint:
     day: date
     value: float
     invested: float
+    price: float | None = None    # per-ETF series only: the ETF's own close
 
 
-def value_series(conn) -> list[SeriesPoint]:
-    trades = load_trades(conn)
+def value_series(conn, isin: str | None = None) -> list[SeriesPoint]:
+    """Daily value and invested amount, for the whole portfolio or (with `isin`) for one ETF."""
+    trades = [t for t in load_trades(conn) if isin is None or t.isin == isin]
     if not trades:
         return []
     closes = _closes(conn)
     first = _day(trades[0].executed_at)
-    days = sorted({d for rows in closes.values() for d, _ in rows if d >= first})
+    sources = closes.values() if isin is None else [closes.get(isin, [])]
+    days = sorted({d for rows in sources for d, _ in rows if d >= first})
     series: list[SeriesPoint] = []
     for day in days:
         upto = [t for t in trades if _day(t.executed_at) <= day]
@@ -146,7 +149,8 @@ def value_series(conn) -> list[SeriesPoint]:
             price = _price_on(closes.get(lot.trade.isin), day)
             invested += lot.cost
             value += lot.remaining * price if price is not None else lot.cost
-        series.append(SeriesPoint(day, float(value), float(invested)))
+        price = _price_on(closes.get(isin), day) if isin else None
+        series.append(SeriesPoint(day, float(value), float(invested), float(price) if price is not None else None))
     return series
 
 
@@ -247,13 +251,15 @@ def _category(t: Trade) -> str:
     return "plan_buy" if t.kind == "SAVINGS_PLAN" else "cash_buy"   # unknown kinds count as one-off buys
 
 
-def trade_markers(conn, days: list[date]) -> dict[date, list[Marker]]:
+def trade_markers(conn, days: list[date], isin: str | None = None) -> dict[date, list[Marker]]:
     """Trades grouped by the chart day they belong to: the last chart day on or before the trade date."""
     if not days:
         return {}
     days = sorted(days)
     out: dict[date, list[Marker]] = {}
     for t in load_trades(conn):
+        if isin is not None and t.isin != isin:
+            continue
         d = _day(t.executed_at)
         i = bisect_right(days, d) - 1
         if i < 0 or (i == len(days) - 1 and (d - days[i]).days > MARKER_GRACE_DAYS):

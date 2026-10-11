@@ -67,6 +67,17 @@ def etf_tabs(conn, ov) -> list[dict]:
     return [{"isin": i, "name": names[i], "rows": services.isin_detail(conn, i).rows} for i in held + others]
 
 
+def view_data(conn, isin: str | None) -> dict:
+    """Chart data for the whole portfolio (isin None) or one ETF. `second` feeds the right-hand chart:
+    profit/loss for the portfolio, the ETF's own price for a single ETF."""
+    series = services.value_series(conn, isin)   # the full history; the range buttons slice it in the browser
+    days = [p.day for p in series]
+    values = [p.value for p in series]
+    second = [round(p.value - p.invested, 2) for p in series] if isin is None else [p.price for p in series]
+    return {"labels": [d.isoformat() for d in days], "values": values, "invested": [p.invested for p in series],
+            "second": second, "markers": marker_series(services.trade_markers(conn, days, isin), days, values)}
+
+
 @router.get("/healthz")
 async def healthz():
     return {"status": "ok"}
@@ -77,16 +88,12 @@ async def portfolio_page(request: Request, range: str = "1y"):
     conn = request.app.state.conn
     today = date.today()
     ov = services.overview(conn, today)
-    series = services.value_series(conn)   # the full history; the range buttons slice it in the browser
-    days = [p.day for p in series]
-    values = [p.value for p in series]
-    markers = marker_series(services.trade_markers(conn, days), days, values)
+    tabs = etf_tabs(conn, ov)
+    views = {"": view_data(conn, None), **{t["isin"]: view_data(conn, t["isin"]) for t in tabs}}
     return templates.TemplateResponse(request, "portfolio.html", _ctx(
         request, ov=ov, range=range if range in RANGES else "1y", ranges=RANGES,
         range_days=services.RANGE_DAYS, today=today.isoformat(),
-        change=services.last_session_change(conn), tabs=etf_tabs(conn, ov),
-        labels=[d.isoformat() for d in days], values=values,
-        invested=[p.invested for p in series], markers=markers))
+        change=services.last_session_change(conn), tabs=tabs, views=views))
 
 
 @router.get("/etf")
