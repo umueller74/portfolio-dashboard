@@ -48,13 +48,16 @@ class Sale:
 
 def replay(trades: list[Trade]) -> tuple[list[Lot], list[Sale]]:
     lots: list[Lot] = []
+    open_lots: dict[str, list[Lot]] = {}  # FIFO queues are per ISIN: a sale never touches another ETF
     sales: list[Sale] = []
     for t in sorted(trades, key=lambda x: (x.executed_at, x.id)):
         if t.side == "BUY":
-            lots.append(Lot(t, t.quantity))
+            lot = Lot(t, t.quantity)
+            lots.append(lot)
+            open_lots.setdefault(t.isin, []).append(lot)
             continue
         need, basis = t.quantity, Decimal(0)
-        for lot in lots:
+        for lot in open_lots.get(t.isin, []):
             if need == 0:
                 break
             take = min(lot.remaining, need)

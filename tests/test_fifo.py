@@ -38,3 +38,14 @@ def test_oversell_raises():
 def test_order_is_by_time_not_input_order():
     lots, sales = replay([t("b", "SELL", "5", "120", 3), t("a", "BUY", "5", "100", 1)])
     assert sales[0].realized == D("100")
+
+
+def test_sale_only_consumes_lots_of_the_same_isin():
+    def tt(id, isin, side, qty, price, day):
+        return Trade(id, isin, "ETF", side, "SINGLE", datetime(2026, 1, day, tzinfo=timezone.utc), D(qty), D(price))
+
+    lots, sales = replay([tt("a", "IE1", "BUY", "10", "100", 1), tt("b", "IE2", "BUY", "10", "50", 2),
+                          tt("c", "IE2", "SELL", "4", "60", 3)])
+    remaining = {l.trade.isin: l.remaining for l in lots}
+    assert remaining == {"IE1": D(10), "IE2": D(6)}      # IE1 untouched although it is the older lot
+    assert sales[0].cost_basis == D("200") and sales[0].realized == D("40")
