@@ -69,7 +69,9 @@ def etf_tabs(conn, ov) -> list[dict]:
 
 def card_texts(conn, ov, today: date) -> dict:
     """The info boxes' texts for every range, so the range buttons can swap them without a reload."""
-    out = {}
+    out: dict = {}
+    if ov.error or not ov.holdings:
+        return out
     for key in RANGES:
         st = services.range_stats(conn, ov, key, today)
         out[key] = {
@@ -78,6 +80,7 @@ def card_texts(conn, ov, today: date) -> dict:
             "invested": f"{_eur(ov.total_cost)} €",
             "invested_sub": "" if st.invested_delta is None else f"{_signed(st.invested_delta)} € in range",
             "pnl": f"{_signed(st.pnl_delta)} €" + ("" if st.pnl_pct is None else f" ({_signed(st.pnl_pct)} %)"),
+            "pnl_sub": f"unrealized {_signed(st.unrealized)} · realized {_signed(st.realized)}",
             "pnl_pos": st.pnl_delta >= 0,
             "xirr": "n/a" if st.xirr is None else f"{st.xirr * 100:+.2f} %"}
     return out

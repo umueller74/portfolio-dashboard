@@ -274,7 +274,9 @@ def trade_markers(conn, days: list[date], isin: str | None = None) -> dict[date,
 class RangeStats:
     value_delta: Decimal | None      # None when the range covers the whole history
     invested_delta: Decimal | None
-    pnl_delta: Decimal
+    unrealized: Decimal              # change in the profit on what is still held
+    realized: Decimal                # profit from sales in the range
+    pnl_delta: Decimal               # unrealized + realized
     pnl_pct: Decimal | None
     xirr: float | None
 
@@ -290,13 +292,20 @@ def range_stats(conn, ov: Overview, key: str, today: date) -> RangeStats:
             start = next((p for p in series if p.day >= cutoff), series[-1])
     v0, i0 = (Decimal(str(start.value)), Decimal(str(start.invested))) if start else (Decimal(0), Decimal(0))
     v1, i1 = ov.total_value, ov.total_cost
-    pnl_delta = (v1 - i1) - (v0 - i0)
+    trades = load_trades(conn)
+    _, sales = replay(trades)
+    in_range = lambda t: start is None or _day(t.executed_at) > start.day
+    realized = sum((s.realized for s in sales if in_range(s.trade)), Decimal(0))
+    unrealized = (v1 - i1) - (v0 - i0)
+    bought = sum((t.quantity * t.price + t.fee for t in trades if t.side == "BUY" and in_range(t)), Decimal(0))
     flows = [(start.day, float(-v0))] if start else []
-    for t in load_trades(conn):
-        if start is None or _day(t.executed_at) > start.day:
+    for t in trades:
+        if in_range(t):
             gross = t.quantity * t.price
             flows.append((_day(t.executed_at), float(-(gross + t.fee) if t.side == "BUY" else gross - t.fee)))
     flows.append((today, float(v1)))
+    total = unrealized + realized
     return RangeStats(
         value_delta=v1 - v0 if start else None, invested_delta=i1 - i0 if start else None,
-        pnl_delta=pnl_delta, pnl_pct=_pct(pnl_delta, v0 + max(i1 - i0, Decimal(0))), xirr=_xirr(flows, today))
+        unrealized=unrealized, realized=realized, pnl_delta=total,
+        pnl_pct=_pct(total, v0 + bought), xirr=_xirr(flows, today))
