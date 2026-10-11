@@ -71,7 +71,7 @@ const GREEN = '#4ade80', RED = '#f87171', ORANGE = '#fb923c';
 Chart.defaults.color = '#c3c8cf';
 Chart.defaults.borderColor = 'rgba(255,255,255,.08)';
 Chart.defaults.maintainAspectRatio = false;
-Chart.defaults.font.size = 10;
+Chart.defaults.font.size = 10.8;
 
 let isin = '', rangeKey = {{ range|tojson }}, offset = 0, charts = [];
 const view = () => D.views[isin];
@@ -82,6 +82,22 @@ const MODES = {'1w': 'day', '1m': 'day', '3m': 'month', '6m': 'month', '1y': 'mo
 const periodOf = (l, m) => m === 'day' ? l : m === 'month' ? l.slice(0, 7) : l.slice(0, 4);
 const showOf = (l, m) => m === 'day' ? String(parseInt(l.slice(8), 10))
   : m === 'month' ? new Date(l + 'T00:00:00Z').toLocaleDateString('en', {month: 'short', timeZone: 'UTC'}) : l.slice(0, 4);
+// a vertical line per trade day, coloured like its marker; drawn behind the data
+const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
+  const {ctx, chartArea: a, scales: {x}} = chart;
+  ctx.save(); ctx.lineWidth = 1.5; ctx.globalAlpha = .55;
+  chart.data.datasets.forEach((ds, k) => {
+    if (!ds.tradeKind) return;
+    ctx.strokeStyle = ds.borderColor;
+    ds.data.forEach((y, i) => {
+      if (y === null) return;
+      const px = Math.round(x.getPixelForValue(i)) + (k % 3 - 1) * 3;   // side by side if several kinds share a day
+      ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+    });
+  });
+  ctx.restore();
+}};
+const GRID = 'rgba(255,255,255,.08)';
 const xTicks = {autoSkip: false, maxRotation: 0, callback(val, i) {
   const labels = this.chart.data.labels, m = MODES[rangeKey];
   return i === 0 || periodOf(labels[i], m) !== periodOf(labels[i - 1], m) ? showOf(labels[i], m) : '';
@@ -92,10 +108,10 @@ const markerSets = [['Savings plan buy', 'plan_buy', GREEN, 'circle', 0], ['One-
                     ['Sell', 'sell', RED, 'triangle', 180]];
 const markerDatasets = ys => markerSets.map(([label, key, color, style, rot]) => ({
   label, data: view().markers[key].map((m, i) => m === null ? null : ys[i]), borderColor: color, backgroundColor: color,
-  showLine: false, pointStyle: style, pointRadius: 6, pointHoverRadius: 8, pointRotation: rot, order: 0}));
+  showLine: false, tradeKind: key, pointStyle: style, pointRadius: 6, pointHoverRadius: 8, pointRotation: rot, order: 0}));
 const tipLines = items => view().markers.tooltips[offset + items[0].dataIndex];
 const options = nLines => ({interaction: {mode: 'index', intersect: false},
-  scales: {x: {ticks: xTicks}},
+  scales: {x: {ticks: xTicks, grid: {color: c => c.tick && c.tick.label ? GRID : 'transparent'}}},
   plugins: {legend: {labels: {usePointStyle: true}},
     tooltip: {filter: item => item.datasetIndex < nLines, callbacks: {afterBody: tipLines}}}});
 
@@ -115,7 +131,7 @@ function build() {
                     ...markerDatasets(v.values)], 2],
     ['pnlChart', [second, ...markerDatasets(v.second)], 1]];
   charts = specs.map(([el, datasets, lines]) => {
-    const chart = new Chart(document.getElementById(el), {type: 'line', data: {labels: v.labels, datasets}, options: options(lines)});
+    const chart = new Chart(document.getElementById(el), {type: 'line', data: {labels: v.labels, datasets}, options: options(lines), plugins: [tradeLines]});
     chart.full = datasets.map(d => d.data);
     return chart;
   });
