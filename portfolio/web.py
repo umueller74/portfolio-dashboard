@@ -59,6 +59,14 @@ def marker_series(markers: dict, labels: list[date], values: list[float]) -> dic
     return out
 
 
+def etf_tabs(conn, ov) -> list[dict]:
+    """One entry per ETF ever traded (held ones first, by value), with its trade rows for the table."""
+    held = [h.isin for h in ov.holdings]
+    names = {t.isin: t.name for t in services.load_trades(conn)}
+    others = sorted((i for i in names if i not in held), key=lambda i: names[i])
+    return [{"isin": i, "name": names[i], "rows": services.isin_detail(conn, i).rows} for i in held + others]
+
+
 @router.get("/healthz")
 async def healthz():
     return {"status": "ok"}
@@ -69,12 +77,14 @@ async def portfolio_page(request: Request, range: str = "1y"):
     conn = request.app.state.conn
     today = date.today()
     ov = services.overview(conn, today)
-    series = services.slice_range(services.value_series(conn), range, today)
+    series = services.value_series(conn)   # the full history; the range buttons slice it in the browser
     days = [p.day for p in series]
     values = [p.value for p in series]
     markers = marker_series(services.trade_markers(conn, days), days, values)
     return templates.TemplateResponse(request, "portfolio.html", _ctx(
-        request, ov=ov, range=range, ranges=RANGES, change=services.last_session_change(conn),
+        request, ov=ov, range=range if range in RANGES else "1y", ranges=RANGES,
+        range_days=services.RANGE_DAYS, today=today.isoformat(),
+        change=services.last_session_change(conn), tabs=etf_tabs(conn, ov),
         labels=[d.isoformat() for d in days], values=values,
         invested=[p.invested for p in series], markers=markers))
 

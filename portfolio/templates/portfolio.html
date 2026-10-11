@@ -1,30 +1,143 @@
-{% extends "base.html" %}{% block body %}
+{% extends "base.html" %}
+{% block style %}
+ .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:1rem;margin-bottom:1rem}
+ .card{background:var(--panel);border-radius:.8rem;padding:.8rem 1.2rem;border-left:.35rem solid var(--line)}
+ .card.key{border-left-color:var(--orange)}
+ .card span{color:var(--muted);text-transform:uppercase;font-size:.75rem;letter-spacing:.06em}
+ .card b{display:block;font-size:1.5rem;margin-top:.2rem}.card.key b{font-size:2rem}
+ .bar{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:1rem}
+ .charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin-bottom:1.5rem}
+ .chart{background:var(--panel);border-radius:.8rem;padding:.8rem}.chart h3{margin:0 0 .5rem;font-size:1rem;color:var(--muted)}
+ .chart div{position:relative;height:clamp(14rem,28vw,34rem)}
+ th.sort{cursor:pointer;user-select:none}th.sort:hover{color:var(--orange)}
+ th.sort::after{content:"";display:inline-block;width:1em}
+ th.sort[data-dir=asc]::after{content:" ▲"}th.sort[data-dir=desc]::after{content:" ▼"}
+ .tablewrap{overflow-x:auto;border-radius:.8rem}
+{% endblock %}
+{% block body %}
 {% if ov.error %}<div class="err">Data error: {{ ov.error }}</div>{% endif %}
 {% if not ov.holdings and not ov.error %}<p>No data yet.</p>{% else %}
 <div class="cards">
- <div class="card">Value<b>{{ ov.total_value|eur }} €</b></div>
- <div class="card">Invested<b>{{ ov.total_cost|eur }} €</b></div>
- <div class="card">Profit / loss<b class="{{ 'pos' if ov.pnl_abs >= 0 else 'neg' }}">{{ ov.pnl_abs|signed }} € ({{ ov.pnl_pct|signed }} %)</b></div>
- <div class="card">XIRR<b>{% if ov.xirr is not none %}{{ '%+.2f'|format(ov.xirr*100) }} %{% else %}n/a{% endif %}</b></div>
- <div class="card">Last session<b>{% if change %}{{ change[0]|signed }} € ({{ change[1]|signed }} %){% else %}n/a{% endif %}</b></div>
+ <div class="card key"><span>Value</span><b>{{ ov.total_value|eur }} €</b></div>
+ <div class="card key"><span>Invested</span><b>{{ ov.total_cost|eur }} €</b></div>
+ <div class="card"><span>Profit / loss</span><b class="{{ 'pos' if ov.pnl_abs >= 0 else 'neg' }}">{{ ov.pnl_abs|signed }} € ({{ ov.pnl_pct|signed }} %)</b></div>
+ <div class="card"><span>XIRR</span><b>{% if ov.xirr is not none %}{{ '%+.2f'|format(ov.xirr*100) }} %{% else %}n/a{% endif %}</b></div>
+ <div class="card"><span>Last session</span><b>{% if change %}{{ change[0]|signed }} € ({{ change[1]|signed }} %){% else %}n/a{% endif %}</b></div>
 </div>
-<p class="ranges">{% for r in ranges %}<a href="/?range={{ r }}"{% if r == range %} style="font-weight:700"{% endif %}>{{ r }}</a>{% endfor %}</p>
-<canvas id="chart" height="110"></canvas>
+
+<div class="bar" id="ranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</div>
+<div class="charts">
+ <div class="chart"><h3>Value and invested (EUR)</h3><div><canvas id="valueChart"></canvas></div></div>
+ <div class="chart"><h3>Profit / loss (EUR)</h3><div><canvas id="pnlChart"></canvas></div></div>
+</div>
+
+<div class="bar" id="etfs">{% for t in tabs %}<button class="btn{{ ' active' if loop.first }}" data-isin="{{ t.isin }}" title="{{ t.isin }}">{{ t.name }}</button>{% endfor %}</div>
+<div class="tablewrap"><table id="trades">
+<thead><tr>
+ <th class="sort" data-type="text">Date</th><th class="sort" data-type="text">Type</th><th class="sort" data-type="num">Quantity</th>
+ <th class="sort" data-type="num">Price</th><th class="sort" data-type="num">Sum</th><th class="sort" data-type="num">Fee</th>
+ <th class="sort" data-type="num">Current value</th><th class="sort" data-type="num">Held</th>
+ <th class="sort" data-type="num">P/L %</th><th class="sort" data-type="num">Realized</th></tr></thead>
+<tbody>
+{% for t in tabs %}{% for r in t.rows|sort(attribute='trade.executed_at', reverse=true) %}
+<tr data-isin="{{ t.isin }}">
+ <td data-v="{{ r.trade.executed_at.isoformat() }}">{{ r.trade.executed_at|berlin_date }}</td>
+ <td data-v="{{ r.trade.side }}">{{ r.trade.side }}{% if r.trade.kind == 'SAVINGS_PLAN' %} <span class="muted">(plan)</span>{% endif %}</td>
+ <td data-v="{{ r.trade.quantity }}">{{ r.trade.quantity|qty }}</td>
+ <td data-v="{{ r.trade.price }}">{{ r.trade.price|eur }}</td>
+ <td data-v="{{ r.paid }}">{{ r.paid|eur }}</td>
+ <td data-v="{{ r.trade.fee }}">{{ r.trade.fee|eur }}</td>
+ <td data-v="{{ r.current_value if r.current_value is not none }}">{{ r.current_value|eur if r.current_value is not none }}</td>
+ <td data-v="{{ r.remaining if r.remaining is not none }}">{{ r.remaining|qty if r.remaining is not none }}</td>
+ <td data-v="{{ r.pnl_pct if r.pnl_pct is not none }}" class="{{ 'pos' if r.pnl_pct is not none and r.pnl_pct >= 0 else 'neg' }}">{% if r.pnl_pct is not none %}{{ r.pnl_pct|signed }} %{% endif %}</td>
+ <td data-v="{{ r.realized if r.realized is not none }}">{{ r.realized|signed if r.realized is not none }}</td></tr>
+{% endfor %}{% endfor %}
+</tbody></table></div>
+
 <script src="/static/chart.umd.min.js"></script>
 <script>
-const tips = {{ markers.tooltips|tojson }};
-const marker = (label, key, color, style, rotation) => ({
-  label, data: {{ markers|tojson }}[key], borderColor: color, backgroundColor: color, showLine: false,
-  pointStyle: style, pointRadius: 7, pointHoverRadius: 9, pointRotation: rotation || 0, order: 0});
-new Chart(document.getElementById('chart'), {type:'line',
- data:{labels:{{ labels|tojson }},datasets:[
-  {label:'Value (EUR)',data:{{ values|tojson }},borderColor:'#2563eb',pointRadius:0,tension:.1,order:2},
-  {label:'Invested (EUR)',data:{{ invested|tojson }},borderColor:'#9ca3af',pointRadius:0,borderDash:[5,4],order:3},
-  marker('Savings plan buy','plan_buy','#16a34a','circle'),
-  marker('One-off buy','cash_buy','#ea580c','triangle'),
-  marker('Sell','sell','#dc2626','triangle',180)]},
- options:{interaction:{mode:'index',intersect:false},
-  plugins:{legend:{labels:{usePointStyle:true}},
-   tooltip:{filter:(item)=>item.datasetIndex<2,callbacks:{afterBody:(items)=>tips[items[0].dataIndex]}}}}});
+const D = {{ {'labels': labels, 'values': values, 'invested': invested, 'markers': markers,
+              'today': today, 'rangeDays': range_days}|tojson }};
+const pnl = D.values.map((v, i) => Math.round((v - D.invested[i]) * 100) / 100);
+const GREEN = '#4ade80', RED = '#f87171', ORANGE = '#fb923c';
+Chart.defaults.color = '#c3c8cf';
+Chart.defaults.borderColor = 'rgba(255,255,255,.08)';
+Chart.defaults.maintainAspectRatio = false;
+
+// markers: same trade days on both charts, y taken from that chart's own series
+const markerSets = [['Savings plan buy', 'plan_buy', GREEN, 'circle', 0], ['One-off buy', 'cash_buy', ORANGE, 'triangle', 0],
+                    ['Sell', 'sell', RED, 'triangle', 180]];
+const markerData = (key, ys) => D.markers[key].map((m, i) => m === null ? null : ys[i]);
+const markerDatasets = ys => markerSets.map(([label, key, color, style, rot]) => ({
+  label, data: markerData(key, ys), borderColor: color, backgroundColor: color, showLine: false,
+  pointStyle: style, pointRadius: 7, pointHoverRadius: 9, pointRotation: rot, order: 0}));
+
+let offset = 0;
+const tipLines = items => D.markers.tooltips[offset + items[0].dataIndex];
+const options = nLines => ({interaction: {mode: 'index', intersect: false},
+  plugins: {legend: {labels: {usePointStyle: true}},
+    tooltip: {filter: item => item.datasetIndex < nLines, callbacks: {afterBody: tipLines}}}});
+
+const charts = [
+  {el: 'valueChart', datasets: [
+    {label: 'Value (EUR)', data: D.values, borderColor: '#60a5fa', pointRadius: 0, tension: .1, order: 2},
+    {label: 'Invested (EUR)', data: D.invested, borderColor: '#9ca3af', pointRadius: 0, borderDash: [5, 4], order: 3},
+    ...markerDatasets(D.values)], lines: 2},
+  {el: 'pnlChart', datasets: [
+    {label: 'Profit / loss (EUR)', data: pnl, pointRadius: 0, tension: .1, order: 2, borderColor: GREEN,
+     segment: {borderColor: c => (c.p0.parsed.y + c.p1.parsed.y) >= 0 ? GREEN : RED},
+     fill: {target: 'origin', above: 'rgba(74,222,128,.15)', below: 'rgba(248,113,113,.15)'}},
+    ...markerDatasets(pnl)], lines: 1},
+].map(c => {
+  const chart = new Chart(document.getElementById(c.el), {type: 'line',
+    data: {labels: D.labels, datasets: c.datasets}, options: options(c.lines)});
+  chart.full = c.datasets.map(d => d.data);
+  return chart;
+});
+
+function setRange(key) {
+  let start = 0;
+  if (D.rangeDays[key]) {
+    const d = new Date(D.today + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - D.rangeDays[key]);
+    const cutoff = d.toISOString().slice(0, 10);
+    start = D.labels.findIndex(l => l >= cutoff);
+    if (start < 0) start = D.labels.length;
+  }
+  offset = start;
+  for (const ch of charts) {
+    ch.data.labels = D.labels.slice(start);
+    ch.data.datasets.forEach((ds, i) => ds.data = ch.full[i].slice(start));
+    ch.update();
+  }
+  document.querySelectorAll('#ranges .btn').forEach(b => b.classList.toggle('active', b.dataset.range === key));
+  history.replaceState(null, '', '?range=' + key);
+}
+document.querySelectorAll('#ranges .btn').forEach(b => b.onclick = () => setRange(b.dataset.range));
+setRange({{ range|tojson }});
+
+// trades table: one ETF at a time, every column sortable (default: date, newest first)
+const tbody = document.querySelector('#trades tbody');
+const heads = [...document.querySelectorAll('#trades th')];
+let isin = document.querySelector('#etfs .btn').dataset.isin;
+let sortCol = 0, sortDir = 'desc';
+function renderTable() {
+  const type = heads[sortCol].dataset.type, sign = sortDir === 'asc' ? 1 : -1;
+  const key = tr => { const v = tr.children[sortCol].dataset.v;
+    return type === 'num' ? (v === '' ? -Infinity : parseFloat(v)) : v; };
+  const rows = [...tbody.children];
+  rows.sort((a, b) => { const x = key(a), y = key(b); return sign * (x < y ? -1 : x > y ? 1 : 0); });
+  rows.forEach(tr => { tr.hidden = tr.dataset.isin !== isin; tbody.appendChild(tr); });
+  heads.forEach((h, i) => { if (i === sortCol) h.dataset.dir = sortDir; else delete h.dataset.dir; });
+}
+heads.forEach((h, i) => h.onclick = () => {
+  sortDir = i === sortCol && sortDir === 'asc' ? 'desc' : 'asc';
+  sortCol = i; renderTable();
+});
+document.querySelectorAll('#etfs .btn').forEach(b => b.onclick = () => {
+  isin = b.dataset.isin;
+  document.querySelectorAll('#etfs .btn').forEach(x => x.classList.toggle('active', x === b));
+  renderTable();
+});
+renderTable();
 </script>
 {% endif %}{% endblock %}
