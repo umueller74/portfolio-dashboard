@@ -268,3 +268,35 @@ def trade_markers(conn, days: list[date], isin: str | None = None) -> dict[date,
         amount = gross + t.fee if t.side == "BUY" else gross - t.fee
         out.setdefault(days[i], []).append(Marker(_category(t), t.isin, t.name, t.side, t.quantity, amount))
     return out
+
+
+@dataclass
+class RangeStats:
+    value_delta: Decimal | None      # None when the range covers the whole history
+    invested_delta: Decimal | None
+    pnl_delta: Decimal
+    pnl_pct: Decimal | None
+    xirr: float | None
+
+
+def range_stats(conn, ov: Overview, key: str, today: date) -> RangeStats:
+    """What the info boxes show for a range: the change since the chart's first point (or since the start of
+    the history when the range covers it all). For the whole history this equals the overall figures."""
+    series = value_series(conn)
+    start = None
+    if key in RANGE_DAYS and series:
+        cutoff = today - timedelta(days=RANGE_DAYS[key])
+        if series[0].day < cutoff:
+            start = next((p for p in series if p.day >= cutoff), series[-1])
+    v0, i0 = (Decimal(str(start.value)), Decimal(str(start.invested))) if start else (Decimal(0), Decimal(0))
+    v1, i1 = ov.total_value, ov.total_cost
+    pnl_delta = (v1 - i1) - (v0 - i0)
+    flows = [(start.day, float(-v0))] if start else []
+    for t in load_trades(conn):
+        if start is None or _day(t.executed_at) > start.day:
+            gross = t.quantity * t.price
+            flows.append((_day(t.executed_at), float(-(gross + t.fee) if t.side == "BUY" else gross - t.fee)))
+    flows.append((today, float(v1)))
+    return RangeStats(
+        value_delta=v1 - v0 if start else None, invested_delta=i1 - i0 if start else None,
+        pnl_delta=pnl_delta, pnl_pct=_pct(pnl_delta, v0 + max(i1 - i0, Decimal(0))), xirr=_xirr(flows, today))

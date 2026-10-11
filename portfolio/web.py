@@ -67,6 +67,22 @@ def etf_tabs(conn, ov) -> list[dict]:
     return [{"isin": i, "name": names[i], "rows": services.isin_detail(conn, i).rows} for i in held + others]
 
 
+def card_texts(conn, ov, today: date) -> dict:
+    """The info boxes' texts for every range, so the range buttons can swap them without a reload."""
+    out = {}
+    for key in RANGES:
+        st = services.range_stats(conn, ov, key, today)
+        out[key] = {
+            "value": f"{_eur(ov.total_value)} €",
+            "value_sub": "" if st.value_delta is None else f"{_signed(st.value_delta)} € in range",
+            "invested": f"{_eur(ov.total_cost)} €",
+            "invested_sub": "" if st.invested_delta is None else f"{_signed(st.invested_delta)} € in range",
+            "pnl": f"{_signed(st.pnl_delta)} €" + ("" if st.pnl_pct is None else f" ({_signed(st.pnl_pct)} %)"),
+            "pnl_pos": st.pnl_delta >= 0,
+            "xirr": "n/a" if st.xirr is None else f"{st.xirr * 100:+.2f} %"}
+    return out
+
+
 def view_data(conn, isin: str | None) -> dict:
     """Chart data for the whole portfolio (isin None) or one ETF. `second` feeds the right-hand chart:
     profit/loss for the portfolio, the ETF's own price for a single ETF."""
@@ -93,7 +109,7 @@ async def portfolio_page(request: Request, range: str = "1y"):
     return templates.TemplateResponse(request, "portfolio.html", _ctx(
         request, ov=ov, range=range if range in RANGES else "1y", ranges=RANGES,
         range_days=services.RANGE_DAYS, today=today.isoformat(),
-        change=services.last_session_change(conn), tabs=tabs, views=views))
+        change=services.last_session_change(conn), tabs=tabs, views=views, cards=card_texts(conn, ov, today)))
 
 
 @router.get("/etf")
