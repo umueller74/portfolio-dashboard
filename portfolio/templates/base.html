@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Portfolio</title>
+<style>
+ body{font-family:system-ui,sans-serif;margin:0;background:#f6f7f9;color:#1c1f24}
+ nav{background:#1c1f24;padding:.7rem 1.2rem}nav a{color:#fff;margin-right:1.2rem;text-decoration:none}
+ main{max-width:1100px;margin:1.2rem auto;padding:0 1rem}
+ table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:.45rem .6rem;border-bottom:1px solid #e3e6ea;text-align:right}
+ th:first-child,td:first-child{text-align:left}.pos{color:#0a7d33}.neg{color:#b3261e}
+ .stale{background:#fde7e7;color:#8a1c14;padding:.5rem 1rem;margin-bottom:1rem}.err{background:#fff3cd;padding:.5rem 1rem;margin-bottom:1rem}
+ .cards{display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap}.card{background:#fff;padding:.8rem 1.2rem;flex:1;min-width:160px}
+ .card b{display:block;font-size:1.4rem}.muted{color:#6b7280}.ranges a{margin-right:.6rem}
+</style></head><body>
+<nav><a href="/">Portfolio</a><a href="/etf">ETFs</a></nav>
+<main>
+{% if stale %}<div class="stale">{% if last_ingest %}Last updated {{ last_ingest.strftime('%Y-%m-%d %H:%M') }} UTC, data may be stale.{% else %}No data yet. The fetcher has not delivered anything.{% endif %}</div>
+{% else %}<p class="muted">Last updated {{ last_ingest.strftime('%Y-%m-%d %H:%M') }} UTC</p>{% endif %}
+{% block body %}{% endblock %}
+</main></body></html>

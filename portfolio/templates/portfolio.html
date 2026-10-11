@@ -1,0 +1,21 @@
+{% extends "base.html" %}{% block body %}
+{% if ov.error %}<div class="err">Data error: {{ ov.error }}</div>{% endif %}
+{% if not ov.holdings and not ov.error %}<p>No data yet.</p>{% else %}
+<div class="cards">
+ <div class="card">Value<b>{{ ov.total_value|eur }} €</b></div>
+ <div class="card">Invested<b>{{ ov.total_cost|eur }} €</b></div>
+ <div class="card">Profit / loss<b class="{{ 'pos' if ov.pnl_abs >= 0 else 'neg' }}">{{ ov.pnl_abs|signed }} € ({{ ov.pnl_pct|signed }} %)</b></div>
+ <div class="card">XIRR<b>{% if ov.xirr is not none %}{{ '%+.2f'|format(ov.xirr*100) }} %{% else %}n/a{% endif %}</b></div>
+ <div class="card">Last session<b>{% if change %}{{ change[0]|signed }} € ({{ change[1]|signed }} %){% else %}n/a{% endif %}</b></div>
+</div>
+<p class="ranges">{% for r in ranges %}<a href="/?range={{ r }}"{% if r == range %} style="font-weight:700"{% endif %}>{{ r }}</a>{% endfor %}</p>
+<canvas id="chart" height="110"></canvas>
+<script src="/static/chart.umd.min.js"></script>
+<script>
+new Chart(document.getElementById('chart'), {type:'line',
+ data:{labels:{{ labels|tojson }},datasets:[
+  {label:'Value (EUR)',data:{{ values|tojson }},borderColor:'#2563eb',pointRadius:0,tension:.1},
+  {label:'Invested (EUR)',data:{{ invested|tojson }},borderColor:'#9ca3af',pointRadius:0,borderDash:[5,4]}]},
+ options:{interaction:{mode:'index',intersect:false}}});
+</script>
+{% endif %}{% endblock %}

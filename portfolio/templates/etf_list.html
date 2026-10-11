@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block body %}
+{% if ov.error %}<div class="err">Data error: {{ ov.error }}</div>{% endif %}
+{% if not ov.holdings and not ov.error %}<p>No data yet.</p>{% else %}
+<table><tr><th>ETF</th><th>Quantity</th><th>Avg cost</th><th>Price</th><th>Value</th><th>Share</th><th>P/L</th><th>P/L %</th><th>XIRR</th></tr>
+{% for h in ov.holdings %}
+<tr><td><a href="/etf/{{ h.isin }}">{{ h.name }}</a><br><span class="muted">{{ h.isin }}</span></td>
+<td>{{ h.quantity|qty }}</td><td>{{ h.avg_cost|eur }}</td><td>{{ h.price|eur }}</td><td>{{ h.value|eur }}</td>
+<td>{{ h.share|eur }} %</td>
+<td class="{{ 'pos' if h.pnl_abs >= 0 else 'neg' }}">{{ h.pnl_abs|signed }}</td>
+<td class="{{ 'pos' if h.pnl_abs >= 0 else 'neg' }}">{{ h.pnl_pct|signed }} %</td>
+<td>{% if h.xirr is not none %}{{ '%+.2f'|format(h.xirr*100) }} %{% else %}n/a{% endif %}</td></tr>
+{% endfor %}</table>{% endif %}{% endblock %}
