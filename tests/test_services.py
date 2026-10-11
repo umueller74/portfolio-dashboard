@@ -116,3 +116,18 @@ def test_range_stats_whole_history_matches_overview_and_short_range_is_a_delta(c
     week = services.range_stats(conn, ov, "1w", today)   # first chart point 2026-10-05: 6 shares at 110
     assert week.value_delta == D(720) - D(660) and week.invested_delta == D(600) - D(600)
     assert week.pnl_delta == D(60) and week.xirr is None   # (720-600) - (660-600); a week is too short for XIRR
+
+
+def test_range_stats_include_realized_profit(client):
+    today = date(2026, 10, 11)
+    seed(client, [trade("a", "BUY", "10", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "SELL", "4", "130", "2026-03-05T10:00:00Z", fee="1")],
+         closes=[{"isin": ISIN, "day": "2026-01-05", "price": "100"}, {"isin": ISIN, "day": "2026-10-09", "price": "110"}],
+         quotes=[{"isin": ISIN, "price": "110", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
+    conn = client.app.state.conn
+    ov = services.overview(conn, today)
+    st = services.range_stats(conn, ov, "all", today)
+    assert ov.pnl_abs == D(60) and st.unrealized == D(60)       # 6 shares held: 660 - 600
+    assert st.realized == D(119)                                # 4 * 130 - 1 fee - 4 * 100
+    assert st.pnl_delta == D(179)
+    assert services.range_stats(conn, ov, "1w", today).realized == D(0)   # the sale is outside the last week
