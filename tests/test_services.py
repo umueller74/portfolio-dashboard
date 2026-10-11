@@ -99,3 +99,20 @@ def test_fee_trades_match_broker_totals(client):
     d = services.isin_detail(client.app.state.conn, ISIN)
     assert d.rows[0].paid == D("42.99") and d.rows[1].paid == D("43.01")
     assert d.rows[1].realized == D("43.01") - D("4") * D("42.99") / D("8")
+
+
+def test_range_stats_whole_history_matches_overview_and_short_range_is_a_delta(client):
+    today = date(2026, 10, 11)
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "100", "2026-10-05T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": d, "price": p} for d, p in
+                 (("2026-01-05", "100"), ("2026-10-01", "110"), ("2026-10-05", "110"), ("2026-10-09", "120"))],
+         quotes=[{"isin": ISIN, "price": "120", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
+    conn = client.app.state.conn
+    ov = services.overview(conn, today)
+    full = services.range_stats(conn, ov, "all", today)
+    assert full.value_delta is None and full.pnl_delta == ov.pnl_abs and full.pnl_pct == ov.pnl_pct
+    assert full.xirr is not None
+    week = services.range_stats(conn, ov, "1w", today)   # first chart point 2026-10-05: 6 shares at 110
+    assert week.value_delta == D(720) - D(660) and week.invested_delta == D(600) - D(600)
+    assert week.pnl_delta == D(60) and week.xirr is None   # (720-600) - (660-600); a week is too short for XIRR
