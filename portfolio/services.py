@@ -161,8 +161,8 @@ def slice_range(series: list[SeriesPoint], key: str, today: date) -> list[Series
     return [p for p in series if p.day >= start]
 
 
-def last_session_change(conn) -> tuple[Decimal, Decimal] | None:
-    trades = load_trades(conn)
+def last_session_change(conn, only: str | None = None) -> tuple[Decimal, Decimal] | None:
+    trades = [t for t in load_trades(conn) if only is None or t.isin == only]
     if not trades:
         return None
     try:
@@ -281,18 +281,25 @@ class RangeStats:
     xirr: float | None
 
 
-def range_stats(conn, ov: Overview, key: str, today: date) -> RangeStats:
+def range_stats(conn, ov: Overview, key: str, today: date, isin: str | None = None,
+                series: list[SeriesPoint] | None = None) -> RangeStats:
     """What the info boxes show for a range: the change since the chart's first point (or since the start of
-    the history when the range covers it all). For the whole history this equals the overall figures."""
-    series = value_series(conn)
+    the history when the range covers it all). For the whole history this equals the overall figures.
+    With `isin` everything is for that ETF alone; `series` may be passed in to avoid recomputing it."""
+    if series is None:
+        series = value_series(conn, isin)
     start = None
     if key in RANGE_DAYS and series:
         cutoff = today - timedelta(days=RANGE_DAYS[key])
         if series[0].day < cutoff:
             start = next((p for p in series if p.day >= cutoff), series[-1])
     v0, i0 = (Decimal(str(start.value)), Decimal(str(start.invested))) if start else (Decimal(0), Decimal(0))
-    v1, i1 = ov.total_value, ov.total_cost
-    trades = load_trades(conn)
+    if isin is None:
+        v1, i1 = ov.total_value, ov.total_cost
+    else:
+        h = next((x for x in ov.holdings if x.isin == isin), None)
+        v1, i1 = (h.value, h.cost) if h else (Decimal(0), Decimal(0))
+    trades = [t for t in load_trades(conn) if isin is None or t.isin == isin]
     _, sales = replay(trades)
     in_range = lambda t: start is None or _day(t.executed_at) > start.day
     realized = sum((s.realized for s in sales if in_range(s.trade)), Decimal(0))
