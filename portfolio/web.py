@@ -60,11 +60,12 @@ def marker_series(markers: dict, labels: list[date], values: list[float]) -> dic
 
 
 def etf_tabs(conn, ov) -> list[dict]:
-    """One entry per ETF ever traded (held ones first, by value), with its trade rows for the table."""
+    """One entry per ETF ever traded (held ones first, by value, flagged active), with its trade rows for the table."""
     held = [h.isin for h in ov.holdings]
     names = {t.isin: t.name for t in services.load_trades(conn)}
     others = sorted((i for i in names if i not in held), key=lambda i: names[i])
-    return [{"isin": i, "name": names[i], "rows": services.isin_detail(conn, i).rows} for i in held + others]
+    return [{"isin": i, "name": names[i], "active": i in held, "rows": services.isin_detail(conn, i).rows}
+            for i in held + others]
 
 
 def _card_texts_for(conn, ov, today: date, isin: str | None) -> dict:

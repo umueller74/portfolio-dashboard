@@ -55,6 +55,17 @@ def test_single_page_has_one_trades_table_with_a_button_per_etf(client):
     assert 'class="btn active" data-isin=""' in html                # Overview is the default selection
 
 
+def test_etf_buttons_grouped_into_active_and_inactive(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin="IE0000000002"),
+                  trade("c", "SELL", "1", "50", "2026-03-05T10:00:00Z", isin="IE0000000002")],
+         quotes=[{"isin": ISIN, "price": "110", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
+    html = client.get("/").text
+    active, inactive = html.index('class="grp">Active<'), html.index('class="grp">Inactive<')
+    held, sold = html.index(f'data-isin="{ISIN}" title'), html.index('data-isin="IE0000000002" title')
+    assert active < held < inactive < sold
+
+
 def test_unknown_range_falls_back_to_one_year(client):
     seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
     assert 'class="btn active" data-range="1y"' in client.get("/?range=bogus").text
