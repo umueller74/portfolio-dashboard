@@ -13,8 +13,11 @@
  th.sort::after{content:"";display:inline-block;width:1em}
  th.sort[data-dir=asc]::after{content:" ▲"}th.sort[data-dir=desc]::after{content:" ▼"}
  .split{display:flex;align-items:flex-start}
- .side{display:flex;flex-direction:column;gap:.4rem;flex:0 0 auto;max-width:16rem}
- .side .btn{text-align:left;white-space:normal;border-right:none;border-radius:.6rem 0 0 .6rem}
+ .side{display:flex;flex-direction:column;flex:0 0 auto;max-width:16rem}
+ .side>*{text-align:left;white-space:normal;border-radius:0}.side>*+*{margin-top:-2px}
+ .side>:first-child{border-top-left-radius:.6rem}.side>:last-child{border-bottom-left-radius:.6rem}
+ .side .grp{border:2px solid var(--orange);padding:.35rem .9rem;background:rgba(242,140,40,.35);font-weight:600}
+ .side .etf{padding-left:1.9rem}
  .tablewrap{flex:1 1 auto;min-width:0;overflow-x:auto;border:2px solid var(--orange);border-radius:0 .8rem .8rem 0;background:var(--panel)}
  .tablewrap table{border-collapse:collapse}
  #trades{font-size:.85rem}
@@ -39,7 +42,10 @@
 </div>
 
 <div class="split">
-<div class="side" id="etfs"><button class="btn active" data-isin="">Overview</button>{% for t in tabs %}<button class="btn" data-isin="{{ t.isin }}" title="{{ t.isin }}">{{ t.name }}</button>{% endfor %}</div>
+<div class="side" id="etfs"><button class="btn active" data-isin="">Overview</button>
+{% for label, active in [('Active', true), ('Inactive', false)] %}{% set group = tabs|selectattr('active', 'equalto', active)|list %}{% if group %}
+<div class="grp">{{ label }}</div>{% for t in group %}<button class="btn etf" data-isin="{{ t.isin }}" title="{{ t.isin }}">{{ t.name }}</button>{% endfor %}
+{% endif %}{% endfor %}</div>
 <div class="tablewrap"><table id="trades" class="hide-etf">
 <thead><tr>
  <th class="sort" data-type="text">ETF</th><th class="sort" data-type="text">Date</th><th class="sort" data-type="text">Type</th><th class="sort" data-type="num">Quantity</th>
