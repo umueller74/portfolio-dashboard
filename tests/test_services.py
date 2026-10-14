@@ -146,3 +146,18 @@ def test_range_stats_for_one_etf_ignore_the_others(client):
     assert (one.unrealized, one.realized) == (D(100), D(0))
     sold = services.range_stats(conn, ov, "all", today, "IE2")          # sold out: all profit is realized
     assert (sold.unrealized, sold.realized) == (D(0), D(50))
+
+
+def test_prime_buy_is_a_one_off_buy_of_a_prime_issuer_etf():
+    from datetime import datetime, timezone
+    from portfolio.fifo import Trade
+
+    def t(name, side="BUY", kind="SINGLE"):
+        return Trade("x", ISIN, name, side, kind, datetime(2026, 1, 1, tzinfo=timezone.utc), D(1), D(1))
+
+    for name in ("iShares Core MSCI World (Acc)", "Xtrackers MSCI Emerging Markets (Acc)",
+                 "Vanguard FTSE All-World (Acc)", "Amundi Prime Global", "Scalable MSCI AC World Xtrackers (Acc)"):
+        assert services.prime_buy(t(name)), name
+    assert not services.prime_buy(t("SPDR S&P 500"))
+    assert not services.prime_buy(t("iShares Core MSCI World (Acc)", side="SELL"))       # sells always cost a fee
+    assert not services.prime_buy(t("iShares Core MSCI World (Acc)", kind="SAVINGS_PLAN"))   # plans are free anyway

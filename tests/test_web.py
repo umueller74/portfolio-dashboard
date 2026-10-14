@@ -81,3 +81,16 @@ def test_per_etf_series_only_use_that_etfs_trades(client):
     assert services.value_series(client.app.state.conn)[0].value == 610.0
     m = services.trade_markers(client.app.state.conn, [p.day for p in one], ISIN)
     assert [x.isin for ms in m.values() for x in ms] == [ISIN]
+
+
+def test_fee_column_marks_prime_etf_buys(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "SELL", "1", "120", "2026-02-05T10:00:00Z", fee="0.99"),
+                  trade("c", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin="IE0000000002")],
+         quotes=[{"isin": ISIN, "price": "110", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
+    conn = client.app.state.conn
+    conn.execute("update trades set name='iShares Core MSCI World (Acc)' where isin=?", (ISIN,))
+    conn.commit()
+    for url in ("/", f"/etf/{ISIN}"):
+        html = client.get(url).text
+        assert html.count('class="prime"') == 1           # the iShares buy; not its sell, not the other ETF

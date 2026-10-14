@@ -229,6 +229,17 @@ def isin_detail(conn, isin: str) -> IsinDetail:
     return detail
 
 
+# Scalable FREE Broker: one-off purchases of these issuers' ETFs ("PRIME ETFs") cost nothing from €250
+# (https://de.scalable.capital/en/trading-costs, footnote 1); sells and smaller buys pay €0.99.
+PRIME_ISSUERS = ("amundi", "ishares", "vanguard", "xtrackers")
+PRIME_NOTE = "PRIME ETF: one-off buys of €250 or more are free on the FREE Broker, smaller buys and all sells cost €0.99"
+
+
+def prime_buy(t: Trade) -> bool:
+    """A one-off buy of a PRIME ETF, i.e. one that is free from €250. Matched on the ETF name, so new ETFs count too."""
+    return t.side == "BUY" and t.kind != "SAVINGS_PLAN" and any(i in t.name.lower() for i in PRIME_ISSUERS)
+
+
 MARKER_CATEGORIES = ("plan_buy", "cash_buy", "sell")
 # A trade newer than the last chart point (its close is not in yet) still gets a marker on that point,
 # but only for a few days; older trades outside the chart's range are dropped.
