@@ -57,7 +57,7 @@
 <tr data-isin="{{ t.isin }}">
  <td data-v="{{ t.name }}">{{ t.name }}</td>
  <td data-v="{{ r.trade.executed_at.isoformat() }}">{{ r.trade.executed_at|berlin_date }}</td>
- <td data-v="{{ r.trade.side }}">{{ r.trade.side }}{% if r.trade.kind == 'SAVINGS_PLAN' %} <span class="muted">(plan)</span>{% endif %}</td>
+ <td data-v="{{ r.trade.side }}">{{ r.trade.side }}{% if r.trade.kind == 'SAVINGS_PLAN' %} <span class="muted">(plan)</span>{% endif %}{% if r.match %} <span class="muted">({{ 'sold' if r.match.side == 'SELL' else 'bought' }} {{ r.match.executed_at|berlin_date }})</span>{% endif %}</td>
  <td data-v="{{ r.trade.quantity }}">{{ r.trade.quantity|qty }}</td>
  <td data-v="{{ r.trade.price }}">{{ r.trade.price|eur }}</td>
  <td data-v="{{ r.paid }}">{{ r.paid|eur }}</td>

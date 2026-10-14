@@ -190,6 +190,7 @@ class TxRow:
     pnl_pct: Decimal | None
     remaining: Decimal | None
     realized: Decimal | None
+    match: Trade | None = None   # the opposite trade a one-off buy or a sell is paired with
 
 
 @dataclass
@@ -200,7 +201,25 @@ class IsinDetail:
     error: str | None = None
 
 
+def match_sells(trades: list[Trade]) -> dict[str, Trade]:
+    """Pair each sell with the nearest earlier unpaired one-off buy of the same quantity; plan buys never pair.
+    Returns both directions (trade id -> its partner); trades without a partner are absent."""
+    pairs: dict[str, Trade] = {}
+    ordered = sorted(trades, key=lambda x: (x.executed_at, x.id))
+    for i, s in enumerate(ordered):
+        if s.side != "SELL":
+            continue
+        b = next((b for b in reversed(ordered[:i]) if b.side == "BUY" and b.kind != "SAVINGS_PLAN"
+                  and b.isin == s.isin and b.quantity == s.quantity and b.id not in pairs), None)
+        if b:
+            pairs[s.id], pairs[b.id] = b, s
+    return pairs
+
+
 def isin_detail(conn, isin: str) -> IsinDetail:
+    """The trade listing for one ETF. Plan buys show their FIFO lot (held, current value, unrealized P/L %);
+    one-off buys and sells show the P/L of their matched pair (see `match_sells`), or none if unmatched.
+    `realized_total` stays the FIFO figure the info boxes use."""
     trades = [t for t in load_trades(conn) if t.isin == isin]
     if not trades:
         return IsinDetail()
@@ -214,18 +233,25 @@ def isin_detail(conn, isin: str) -> IsinDetail:
     closes = _closes(conn).get(isin)
     price = Decimal(row["price"]) if row else (closes[-1][1] if closes else None)
     lot_by_id = {l.trade.id: l for l in lots}
-    sale_by_id = {s.trade.id: s for s in sales}
+    pairs = match_sells(trades)
+    detail.realized_total = sum((s.realized for s in sales), Decimal(0))
+    cash = lambda t: t.quantity * t.price + (t.fee if t.side == "BUY" else -t.fee)
     for t in trades:
-        if t.side == "BUY":
+        if t.side == "BUY" and t.kind == "SAVINGS_PLAN":
             lot = lot_by_id[t.id]
-            paid = t.quantity * t.price + t.fee
             value = lot.remaining * price if price is not None else None
             pct = _pct(value - lot.cost, lot.cost) if value is not None and lot.remaining > 0 else None
-            detail.rows.append(TxRow(t, paid, value, pct, lot.remaining, None))
+            detail.rows.append(TxRow(t, cash(t), value, pct, lot.remaining, None))
+        elif m := pairs.get(t.id):
+            buy, sell = (t, m) if t.side == "BUY" else (m, t)
+            realized = cash(sell) - cash(buy)
+            held = Decimal(0) if t.side == "BUY" else None
+            detail.rows.append(TxRow(t, cash(t), None, _pct(realized, cash(buy)), held, realized, m))
+        elif t.side == "BUY":
+            value = t.quantity * price if price is not None else None
+            detail.rows.append(TxRow(t, cash(t), value, None, t.quantity, None))
         else:
-            s = sale_by_id[t.id]
-            detail.rows.append(TxRow(t, s.proceeds, None, _pct(s.realized, s.cost_basis), None, s.realized))
-            detail.realized_total += s.realized
+            detail.rows.append(TxRow(t, cash(t), None, None, None, None))
     return detail
 
 

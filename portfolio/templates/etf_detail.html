@@ -6,7 +6,7 @@
 <table><tr><th>Date</th><th>Type</th><th>Quantity</th><th>Price</th><th>Sum</th><th>Fee</th><th>Current value</th><th>Held</th><th>P/L %</th><th>Realized</th></tr>
 {% for r in d.rows %}
 <tr><td>{{ r.trade.executed_at|berlin_date }}</td>
-<td>{{ r.trade.side }}{% if r.trade.kind == 'SAVINGS_PLAN' %} <span class="muted">(plan)</span>{% endif %}</td>
+<td>{{ r.trade.side }}{% if r.trade.kind == 'SAVINGS_PLAN' %} <span class="muted">(plan)</span>{% endif %}{% if r.match %} <span class="muted">({{ 'sold' if r.match.side == 'SELL' else 'bought' }} {{ r.match.executed_at|berlin_date }})</span>{% endif %}</td>
 <td>{{ r.trade.quantity|qty }}</td><td>{{ r.trade.price|eur }}</td><td>{{ r.paid|eur }}</td><td>{{ r.trade.fee|eur }}</td>
 <td>{{ r.current_value|eur if r.current_value is not none else '' }}</td>
 <td>{{ r.remaining|qty if r.remaining is not none else '' }}</td>
