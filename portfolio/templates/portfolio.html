@@ -9,6 +9,11 @@
  .charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin-bottom:1.5rem}
  .chart{background:var(--panel);border-radius:.8rem;padding:.8rem}.chart h3{margin:0 0 .5rem;font-size:1rem;color:var(--muted)}
  .chart div{position:relative;height:clamp(7rem,14vw,17rem)}
+ .chart h3{display:flex;justify-content:space-between;align-items:center}
+ .maxbtn{background:none;border:1px solid var(--line);border-radius:.4rem;color:var(--muted);font:inherit;padding:0 .45rem;cursor:pointer}
+ .maxbtn:hover{color:var(--orange);border-color:var(--orange)}
+ .chart.max{position:fixed;inset:1.5rem;z-index:10;box-shadow:0 0 0 100vmax rgba(0,0,0,.6)}
+ .chart.max div{height:calc(100% - 2.2rem)}
  th.sort{cursor:pointer;user-select:none}th.sort:hover{color:var(--orange)}
  th.sort::after{content:"";display:inline-block;width:1em}
  th.sort[data-dir=asc]::after{content:" ▲"}th.sort[data-dir=desc]::after{content:" ▼"}
@@ -38,7 +43,7 @@
 <div class="bar" id="ranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</div>
 <div class="charts">
  <div class="chart"><h3 id="viTitle">Value and invested (EUR)</h3><div><canvas id="valueChart"></canvas></div></div>
- <div class="chart"><h3 id="plTitle">Profit / Loss (EUR)</h3><div><canvas id="pnlChart"></canvas></div></div>
+ <div class="chart"><h3><span id="plTitle">Profit / Loss (EUR)</span><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
 </div>
 
 <div class="split">
@@ -133,18 +138,33 @@ function build() {
        segment: {borderColor: c => (c.p0.parsed.y + c.p1.parsed.y) >= 0 ? GREEN : RED},
        fill: {target: 'origin', above: 'rgba(74,222,128,.15)', below: 'rgba(248,113,113,.15)'}}
     : {label: 'Price (EUR)', data: v.second, pointRadius: 0, tension: .1, order: 2, borderColor: '#c4b5fd'};
+  // 20/50-day averages: computed over the ETF's whole history, so every range shows them from its first day
+  const averages = all ? [] : [['MA 20d', v.ma20, '#38bdf8'], ['MA 50d', v.ma50, '#f472b6']].map(([label, data, color]) =>
+    ({label, data, borderColor: color, borderWidth: 1.5, pointRadius: 0, tension: .1, order: 2}));
   const specs = [
     ['valueChart', [{label: 'Value (EUR)', data: v.values, borderColor: '#60a5fa', pointRadius: 0, tension: .1, order: 2},
                     {label: 'Invested (EUR)', data: v.invested, borderColor: '#9ca3af', pointRadius: 0, borderDash: [5, 4], order: 3},
                     ...markerDatasets(v.values)], 2],
-    ['pnlChart', [second, ...markerDatasets(v.second)], 1]];
+    ['pnlChart', [second, ...averages, ...markerDatasets(v.second)], 1 + averages.length]];
   charts = specs.map(([el, datasets, lines]) => {
     const chart = new Chart(document.getElementById(el), {type: 'line', data: {labels: v.labels, datasets}, options: options(lines), plugins: [tradeLines]});
     chart.full = datasets.map(d => d.data);
     return chart;
   });
+  maxBtn.hidden = all;
+  if (all) maximize(false);
   applyRange();
 }
+
+// the ETF price chart can fill the window; Esc or the button restores it
+const maxBtn = document.getElementById('plMax'), plBox = maxBtn.closest('.chart');
+function maximize(on) {
+  plBox.classList.toggle('max', on);
+  maxBtn.textContent = on ? '✕' : '⤢';
+  maxBtn.title = on ? 'Restore (Esc)' : 'Maximize';
+}
+maxBtn.onclick = () => maximize(!plBox.classList.contains('max'));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') maximize(false); });
 
 function applyRange() {
   const v = view();

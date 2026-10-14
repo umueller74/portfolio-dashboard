@@ -161,3 +161,15 @@ def test_prime_buy_is_a_one_off_buy_of_a_prime_issuer_etf():
     assert not services.prime_buy(t("SPDR S&P 500"))
     assert not services.prime_buy(t("iShares Core MSCI World (Acc)", side="SELL"))       # sells always cost a fee
     assert not services.prime_buy(t("iShares Core MSCI World (Acc)", kind="SAVINGS_PLAN"))   # plans are free anyway
+
+
+def test_moving_averages_use_closes_from_before_the_first_trade(client):
+    days = [date(2026, 1, 1) + timedelta(days=i) for i in range(6)]
+    seed(client, [trade("a", "BUY", "1", "1", "2026-01-05T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": d.isoformat(), "price": str(i + 1)} for i, d in enumerate(days)])
+    conn = client.app.state.conn
+    labels = [p.day for p in services.value_series(conn, ISIN)]
+    assert labels == days[4:]                          # the chart starts at the first trade ...
+    ma = services.moving_averages(conn, ISIN, labels, (3, 6))
+    assert ma[3] == [4.0, 5.0]                         # ... but the averages reach back: (3+4+5)/3, (4+5+6)/3
+    assert ma[6] == [None, 3.5]                        # too few closes yet on the first chart day
