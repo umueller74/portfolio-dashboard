@@ -103,7 +103,7 @@ const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
   const {ctx, chartArea: a, scales: {x}} = chart;
   ctx.save(); ctx.lineWidth = 1.5; ctx.globalAlpha = .55;
   chart.data.datasets.forEach((ds, k) => {
-    if (!ds.tradeKind) return;
+    if (!ds.tradeKind || !chart.isDatasetVisible(k)) return;   // legend-hidden markers lose their lines too
     ctx.strokeStyle = ds.borderColor;
     ds.data.forEach((y, i) => {
       if (y === null) return;
