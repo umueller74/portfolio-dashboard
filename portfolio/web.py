@@ -31,6 +31,8 @@ def _berlin_date(dt: datetime) -> str:
 
 
 templates.env.filters.update(eur=_eur, signed=_signed, qty=_qty, berlin_date=_berlin_date)
+templates.env.tests["prime_buy"] = services.prime_buy
+templates.env.globals["prime_note"] = services.PRIME_NOTE
 
 
 def _last_ingest(conn) -> datetime | None:
