@@ -1,13 +1,15 @@
 import hmac
 import os
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
+
+from portfolio import signals
 
 router = APIRouter(prefix="/api")
 
@@ -52,7 +54,7 @@ def require_token(request: Request, authorization: str = Header(default="")):
 
 
 @router.post("/ingest", dependencies=[Depends(require_token)])
-async def ingest(body: IngestIn, request: Request):
+async def ingest(body: IngestIn, request: Request, tasks: BackgroundTasks):
     conn = request.app.state.conn
     with conn:
         for t in body.trades:
@@ -83,6 +85,8 @@ async def ingest(body: IngestIn, request: Request):
             " on conflict(key) do update set value=excluded.value",
             (body.fetched_at.isoformat(),),
         )
+    # crossover alerts after the response; runs in the threadpool so a slow Telegram call never blocks requests
+    tasks.add_task(signals.check, conn, datetime.now(timezone.utc), request.app.state.notify)
     return {"trades": len(body.trades), "closes": len(body.closes), "quotes": len(body.quotes)}
 
 

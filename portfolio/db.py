@@ -23,6 +23,9 @@ create table if not exists quotes(
   isin text primary key, price text not null, quoted_at text not null, outdated integer not null
 );
 create table if not exists meta(key text primary key, value text not null);
+create table if not exists signals(
+  isin text primary key, state text not null check (state in ('above','below')), day text not null
+);
 """
 
 
