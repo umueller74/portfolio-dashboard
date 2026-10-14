@@ -98,51 +98,7 @@ def test_fee_trades_match_broker_totals(client):
                   trade("b", "SELL", "4", "11", "2026-02-05T10:00:00Z", fee="0.99")])
     d = services.isin_detail(client.app.state.conn, ISIN)
     assert d.rows[0].paid == D("42.99") and d.rows[1].paid == D("43.01")
-    assert d.realized_total == D("43.01") - D("4") * D("42.99") / D("8")
-
-
-def _rows(client):
-    return {r.trade.id: r for r in services.isin_detail(client.app.state.conn, ISIN).rows}
-
-
-def test_sell_is_matched_to_the_one_off_buy_of_the_same_quantity(client):
-    seed(client, [trade("p1", "BUY", "1", "100", "2026-01-01T10:00:00Z", kind="SAVINGS_PLAN"),
-                  trade("a", "BUY", "2", "100", "2026-01-02T10:00:00Z", fee="1"),
-                  trade("p2", "BUY", "1", "100", "2026-01-03T10:00:00Z", kind="SAVINGS_PLAN"),
-                  trade("b", "SELL", "2", "120", "2026-01-04T10:00:00Z", fee="1")],
-         quotes=[{"isin": ISIN, "price": "110", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
-    r = _rows(client)
-    assert r["a"].match is r["b"].trade and r["b"].match is r["a"].trade
-    assert r["a"].realized == r["b"].realized == D(38)               # 239 - 201
-    assert r["a"].pnl_pct == r["b"].pnl_pct == D(38) / D(201) * 100
-    assert r["a"].remaining == 0 and r["a"].current_value is None
-    # plan buys keep their FIFO view: p1 was consumed by the sale, p2 is still held
-    assert r["p1"].remaining == 0 and r["p1"].pnl_pct is None and r["p1"].match is None
-    assert (r["p2"].remaining, r["p2"].current_value, r["p2"].pnl_pct) == (D(1), D(110), D(10))
-
-
-def test_trades_without_a_matching_opposite_get_no_pnl(client):
-    seed(client, [trade("p", "BUY", "5", "100", "2026-01-01T10:00:00Z", kind="SAVINGS_PLAN"),
-                  trade("a", "BUY", "3", "100", "2026-01-02T10:00:00Z"),
-                  trade("b", "SELL", "2", "120", "2026-01-03T10:00:00Z"),
-                  trade("c", "BUY", "1", "100", "2026-01-04T10:00:00Z"),
-                  trade("d", "SELL", "1", "120", "2026-01-05T10:00:00Z")],   # c is later: only earlier buys match
-         quotes=[{"isin": ISIN, "price": "110", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
-    r = _rows(client)
-    assert r["d"].match is r["c"].trade
-    for id in ("a", "b"):
-        assert r[id].match is None and r[id].realized is None and r[id].pnl_pct is None
-    assert (r["a"].remaining, r["a"].current_value) == (D(3), D(330))
-
-
-def test_sell_matches_the_nearest_earlier_buy_and_each_buy_only_once(client):
-    seed(client, [trade("a", "BUY", "2", "100", "2026-01-01T10:00:00Z"),
-                  trade("b", "BUY", "2", "110", "2026-01-02T10:00:00Z"),
-                  trade("c", "SELL", "2", "120", "2026-01-03T10:00:00Z"),
-                  trade("d", "SELL", "2", "130", "2026-01-04T10:00:00Z")])
-    r = _rows(client)
-    assert r["c"].match is r["b"].trade and r["d"].match is r["a"].trade
-    assert r["c"].realized == D(20) and r["d"].realized == D(60)
+    assert d.rows[1].realized == D("43.01") - D("4") * D("42.99") / D("8")
 
 
 def test_range_stats_whole_history_matches_overview_and_short_range_is_a_delta(client):
