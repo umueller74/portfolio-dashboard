@@ -12,6 +12,8 @@
  .chart h3{display:flex;justify-content:space-between;align-items:center}
  .maxbtn{background:none;border:1px solid var(--line);border-radius:.4rem;color:var(--muted);font:inherit;padding:0 .45rem;cursor:pointer}
  .maxbtn:hover{color:var(--orange);border-color:var(--orange)}
+ .maxranges{display:none;gap:.4rem;margin:0 .8rem 0 auto}.chart.max .maxranges{display:flex}
+ .maxranges .btn{padding:.1rem .6rem;font-weight:400}.maxranges .btn.active{font-weight:600}
  .chart.max{position:fixed;inset:1.5rem;z-index:10;box-shadow:0 0 0 100vmax rgba(0,0,0,.6)}
  .chart.max div{height:calc(100% - 2.2rem)}
  th.sort{cursor:pointer;user-select:none}th.sort:hover{color:var(--orange)}
@@ -43,7 +45,8 @@
 <div class="bar" id="ranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</div>
 <div class="charts">
  <div class="chart"><h3 id="viTitle">Value and invested (EUR)</h3><div><canvas id="valueChart"></canvas></div></div>
- <div class="chart"><h3><span id="plTitle">Profit / Loss (EUR)</span><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
+ <div class="chart"><h3><span id="plTitle">Profit / Loss (EUR)</span>
+  <span class="maxranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</span><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
 </div>
 
 <div class="split">
@@ -181,13 +184,14 @@ function applyRange() {
     ch.data.datasets.forEach((ds, i) => ds.data = ch.full[i].slice(start));
     ch.update();
   }
-  document.querySelectorAll('#ranges .btn').forEach(b => b.classList.toggle('active', b.dataset.range === rangeKey));
+  document.querySelectorAll('.btn[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === rangeKey));
   const c = D.cards[isin][rangeKey];
   for (const k of ['value', 'value_sub', 'invested', 'invested_sub', 'pnl', 'pnl_sub', 'xirr', 'session']) document.getElementById('c-' + k).textContent = c[k];
   document.getElementById('c-pnl').className = c.pnl_pos ? 'pos' : 'neg';
   history.replaceState(null, '', '?range=' + rangeKey);
 }
-document.querySelectorAll('#ranges .btn').forEach(b => b.onclick = () => { rangeKey = b.dataset.range; applyRange(); });
+// range buttons: the bar above the charts, plus a copy in the maximized chart's header
+document.querySelectorAll('.btn[data-range]').forEach(b => b.onclick = () => { rangeKey = b.dataset.range; applyRange(); });
 
 // trades table: one ETF at a time, every column sortable (default: date, newest first)
 const tbody = document.querySelector('#trades tbody');

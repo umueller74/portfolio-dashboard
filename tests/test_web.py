@@ -107,3 +107,12 @@ def test_etf_view_has_20_and_50_day_averages_and_a_maximize_button(client):
     assert v["ma20"] == [None] and v["ma50"] == [None]
     assert "ma20" not in view_data(client.app.state.conn, None)
     assert 'id="plMax"' in client.get("/").text
+
+
+def test_maximized_price_chart_has_its_own_range_buttons(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
+    html = client.get("/?range=3m").text
+    header = html[html.index('class="maxranges"'):html.index('id="plMax"')]
+    for key in ("1w", "1m", "3m", "6m", "1y", "all"):
+        assert f'data-range="{key}"' in header
+    assert html.count('class="btn active" data-range="3m"') == 2      # bar and header agree
