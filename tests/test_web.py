@@ -1,6 +1,7 @@
 import re
 
 from portfolio import services
+from portfolio.web import view_data
 from tests.conftest import AUTH, payload
 from tests.test_services import ISIN, seed, trade
 
@@ -97,3 +98,12 @@ def test_fee_column_marks_prime_etf_buys(client):
         html = client.get(url).text
         assert html.count('class="prime"') == 1           # the iShares buy; not its sell, not the other ETF
         assert re.search(r'class="prime"[^>]*>★</span>0\.00</td>', html)   # star in front of the fee
+
+
+def test_etf_view_has_20_and_50_day_averages_and_a_maximize_button(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-06T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": "2026-01-06", "price": "110"}])
+    v = view_data(client.app.state.conn, ISIN)
+    assert v["ma20"] == [None] and v["ma50"] == [None]
+    assert "ma20" not in view_data(client.app.state.conn, None)
+    assert 'id="plMax"' in client.get("/").text

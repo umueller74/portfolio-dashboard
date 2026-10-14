@@ -154,6 +154,15 @@ def value_series(conn, isin: str | None = None) -> list[SeriesPoint]:
     return series
 
 
+def moving_averages(conn, isin: str, days: list[date], windows=(20, 50)) -> dict[int, list[float | None]]:
+    """Simple moving average of the ETF's closes over the last n closes, for each chart day and window.
+    Uses every stored close, so the averages are complete from the chart's first day whenever enough
+    closes precede it; None where fewer than n closes exist yet."""
+    rows = _closes(conn).get(isin, [])
+    ends = [bisect_right([d for d, _ in rows], day) for day in days]
+    return {n: [float(sum(p for _, p in rows[i - n:i]) / n) if i >= n else None for i in ends] for n in windows}
+
+
 def slice_range(series: list[SeriesPoint], key: str, today: date) -> list[SeriesPoint]:
     if key not in RANGE_DAYS:
         return series

@@ -105,13 +105,16 @@ def card_texts(conn, ov, today: date, isins: list[str]) -> dict:
 
 def view_data(conn, isin: str | None) -> dict:
     """Chart data for the whole portfolio (isin None) or one ETF. `second` feeds the right-hand chart:
-    profit/loss for the portfolio, the ETF's own price for a single ETF."""
+    profit/loss for the portfolio, the ETF's own price (plus `ma20`/`ma50`) for a single ETF."""
     series = services.value_series(conn, isin)   # the full history; the range buttons slice it in the browser
     days = [p.day for p in series]
     values = [p.value for p in series]
     second = [round(p.value - p.invested, 2) for p in series] if isin is None else [p.price for p in series]
-    return {"labels": [d.isoformat() for d in days], "values": values, "invested": [p.invested for p in series],
-            "second": second, "markers": marker_series(services.trade_markers(conn, days, isin), days, values)}
+    out = {"labels": [d.isoformat() for d in days], "values": values, "invested": [p.invested for p in series],
+           "second": second, "markers": marker_series(services.trade_markers(conn, days, isin), days, values)}
+    if isin is not None:   # 20- and 50-day averages of the ETF's price, over its whole history (range-independent)
+        out.update({f"ma{n}": ma for n, ma in services.moving_averages(conn, isin, days).items()})
+    return out
 
 
 @router.get("/healthz")
