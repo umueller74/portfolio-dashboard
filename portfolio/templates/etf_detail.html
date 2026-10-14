@@ -7,7 +7,7 @@
 {% for r in d.rows %}
 <tr><td>{{ r.trade.executed_at|berlin_date }}</td>
 <td>{{ r.trade.side }}{% if r.trade.kind == 'SAVINGS_PLAN' %} <span class="muted">(plan)</span>{% endif %}</td>
-<td>{{ r.trade.quantity|qty }}</td><td>{{ r.trade.price|eur }}</td><td>{{ r.paid|eur }}</td><td>{{ r.trade.fee|eur }}{% if r.trade is prime_buy %}<span class="prime" title="{{ prime_note }}">★</span>{% endif %}</td>
+<td>{{ r.trade.quantity|qty }}</td><td>{{ r.trade.price|eur }}</td><td>{{ r.paid|eur }}</td><td>{% if r.trade is prime_buy %}<span class="prime" title="{{ prime_note }}">★</span>{% endif %}{{ r.trade.fee|eur }}</td>
 <td>{{ r.current_value|eur if r.current_value is not none else '' }}</td>
 <td>{{ r.remaining|qty if r.remaining is not none else '' }}</td>
 <td class="{{ 'pos' if r.pnl_pct is not none and r.pnl_pct >= 0 else 'neg' }}">{{ r.pnl_pct|signed if r.pnl_pct is not none else '' }}{{ ' %' if r.pnl_pct is not none }}</td>
