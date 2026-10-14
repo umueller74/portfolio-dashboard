@@ -61,7 +61,7 @@
  <td data-v="{{ r.trade.quantity }}">{{ r.trade.quantity|qty }}</td>
  <td data-v="{{ r.trade.price }}">{{ r.trade.price|eur }}</td>
  <td data-v="{{ r.paid }}">{{ r.paid|eur }}</td>
- <td data-v="{{ r.trade.fee }}">{{ r.trade.fee|eur }}{% if r.trade is prime_buy %}<span class="prime" title="{{ prime_note }}">★</span>{% endif %}</td>
+ <td data-v="{{ r.trade.fee }}">{% if r.trade is prime_buy %}<span class="prime" title="{{ prime_note }}">★</span>{% endif %}{{ r.trade.fee|eur }}</td>
  <td data-v="{{ r.current_value if r.current_value is not none }}">{{ r.current_value|eur if r.current_value is not none }}</td>
  <td data-v="{{ r.remaining if r.remaining is not none }}">{{ r.remaining|qty if r.remaining is not none }}</td>
  <td data-v="{{ r.pnl_pct if r.pnl_pct is not none }}" class="{{ 'pos' if r.pnl_pct is not none and r.pnl_pct >= 0 else 'neg' }}">{% if r.pnl_pct is not none %}{{ r.pnl_pct|signed }} %{% endif %}</td>

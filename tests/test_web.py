@@ -1,3 +1,5 @@
+import re
+
 from portfolio import services
 from tests.conftest import AUTH, payload
 from tests.test_services import ISIN, seed, trade
@@ -94,3 +96,4 @@ def test_fee_column_marks_prime_etf_buys(client):
     for url in ("/", f"/etf/{ISIN}"):
         html = client.get(url).text
         assert html.count('class="prime"') == 1           # the iShares buy; not its sell, not the other ETF
+        assert re.search(r'class="prime"[^>]*>★</span>0\.00</td>', html)   # star in front of the fee
