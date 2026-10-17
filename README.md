@@ -9,5 +9,7 @@ LAN-only ETF portfolio dashboard fed from the Scalable Capital MCP.
 Money is `Decimal` end to end; cost basis is FIFO; fees come from `get_transaction_details`.
 
 Crossover alerts: after every ingest, each held ETF's 20-day vs 50-day average of the closes (last completed
-session) is compared with the side stored in `signals`; a cross up sends BUY, a cross down SELL, through the
-Telegram Bot API when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set. First sight of an ETF is recorded silently.
+session) is compared with the side stored in `signals`; a cross up sends BUY, a cross down SELL, or DIP when
+the close is still above its 200-day average (a pullback in an uptrend, a buying chance; SELL while fewer than
+200 closes exist), through the Telegram Bot API when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set.
+First sight of an ETF is recorded silently.

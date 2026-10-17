@@ -1,6 +1,8 @@
 """Moving-average crossover alerts for the ETFs currently held: a BUY when the 20-day average of the closes
-rises above the 50-day one, a SELL when it falls below. The last side per ETF is kept in `signals`; an ETF
-seen for the first time (or bought again after selling out) is recorded without an alert."""
+rises above the 50-day one, a SELL when it falls below. A fall below while the close is still above the
+200-day average is a DIP instead: a pullback inside an uptrend, which backtests showed to be a buying chance
+rather than an exit. With fewer than 200 closes it stays a SELL. The last side per ETF is kept in `signals`;
+an ETF seen for the first time (or bought again after selling out) is recorded without an alert."""
 import json
 import logging
 import urllib.request
@@ -12,7 +14,7 @@ from portfolio import services
 
 log = logging.getLogger("portfolio.signals")
 SESSION_END_HOUR = 22      # gettex closes 22:00 Berlin; until then today's close is still moving
-FAST, SLOW = 20, 50
+FAST, SLOW, TREND = 20, 50, 200
 
 Sender = Callable[[str], None]
 
@@ -21,17 +23,24 @@ Sender = Callable[[str], None]
 class Signal:
     isin: str
     name: str
-    action: str          # BUY | SELL
+    action: str          # BUY | SELL | DIP
     day: date
     close: float
     fast: float
     slow: float
+    trend: float | None = None
 
     def text(self) -> str:
-        icon, side = ("📈", "above") if self.action == "BUY" else ("📉", "below")
-        return (f"{icon} {self.action} signal: {self.name} ({self.isin})\n"
+        icon, side = {"BUY": ("📈", "above"), "SELL": ("📉", "below"), "DIP": ("🛒", "below")}[self.action]
+        text = (f"{icon} {self.action} signal: {self.name} ({self.isin})\n"
                 f"MA {FAST}d {self.fast:,.2f} crossed {side} MA {SLOW}d {self.slow:,.2f} "
                 f"on {self.day.isoformat()} (close {self.close:,.2f})")
+        if self.action != "BUY" and self.trend is not None:
+            where = "above" if self.close > self.trend else "below"
+            text += f", {where} MA {TREND}d {self.trend:,.2f}"
+            if self.action == "DIP":
+                text += "\nDip in an uptrend: a buying chance, not an exit"
+        return text
 
 
 def _last_session(conn, isin: str, now: datetime) -> tuple[date, float] | None:
@@ -59,15 +68,19 @@ def check(conn, now: datetime, send: Sender | None) -> list[Signal]:
         if last is None:
             continue
         day, close = last
-        ma = services.moving_averages(conn, isin, [day], (FAST, SLOW))
-        fast, slow = ma[FAST][0], ma[SLOW][0]
+        ma = services.moving_averages(conn, isin, [day], (FAST, SLOW, TREND))
+        fast, slow, trend = ma[FAST][0], ma[SLOW][0], ma[TREND][0]
         if fast is None or slow is None or fast == slow:
             continue
         side = "above" if fast > slow else "below"
         if stored.get(isin) == side:
             continue
         if isin in stored and send is not None:
-            sig = Signal(isin, name, "BUY" if side == "above" else "SELL", day, close, fast, slow)
+            if side == "above":
+                action = "BUY"
+            else:
+                action = "DIP" if trend is not None and close > trend else "SELL"
+            sig = Signal(isin, name, action, day, close, fast, slow, trend)
             try:
                 send(sig.text())
             except Exception:
