@@ -14,7 +14,8 @@
  .maxbtn:hover{color:var(--orange);border-color:var(--orange)}
  .maxranges{display:none;gap:.4rem;margin:0 .8rem 0 auto}.chart.max .maxranges{display:flex}
  .maxranges .btn{padding:.1rem .6rem;font-weight:400}.maxranges .btn.active{font-weight:600}
- .chart.max{position:fixed;inset:1.5rem;z-index:10;box-shadow:0 0 0 100vmax rgba(0,0,0,.6)}
+ .chart.zoomable{cursor:zoom-in}
+ .chart.max{position:fixed;inset:1.5rem;z-index:10;cursor:auto;box-shadow:0 0 0 100vmax rgba(0,0,0,.6)}
  .chart.max div{height:calc(100% - 2.2rem)}
  th.sort{cursor:pointer;user-select:none}th.sort:hover{color:var(--orange)}
  th.sort::after{content:"";display:inline-block;width:1em}
@@ -160,18 +161,20 @@ function build() {
     return chart;
   });
   maxBtn.hidden = all;
+  plBox.classList.toggle('zoomable', !all);
   if (all) maximize(false);
   applyRange();
 }
 
-// the ETF price chart can fill the window; Esc or the button restores it
+// the ETF price chart can fill the window, by a click into it or the button; Esc or the button restores it
 const maxBtn = document.getElementById('plMax'), plBox = maxBtn.closest('.chart');
 function maximize(on) {
   plBox.classList.toggle('max', on);
   maxBtn.textContent = on ? '✕' : '⤢';
   maxBtn.title = on ? 'Restore (Esc)' : 'Maximize';
 }
-maxBtn.onclick = () => maximize(!plBox.classList.contains('max'));
+maxBtn.onclick = e => { e.stopPropagation(); maximize(!plBox.classList.contains('max')); };
+plBox.addEventListener('click', () => { if (!maxBtn.hidden) maximize(true); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') maximize(false); });
 
 function applyRange() {
