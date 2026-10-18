@@ -13,3 +13,9 @@ session) is compared with the side stored in `signals`; a cross up sends BUY, a 
 the close is still above its 200-day average (a pullback in an uptrend, a buying chance; SELL while fewer than
 200 closes exist), through the Telegram Bot API when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set.
 First sight of an ETF is recorded silently.
+
+Price history: the MCP's chart is daily only for the current year, so after an ingest every ETF ever traded that
+is not in `backfills` yet gets its daily EUR closes since launch from justETF (`portfolio/history.py`), stored in
+`closes` for the days before its first broker close. Each ETF is fetched once (new ones on the ingest after their
+first trade); a failed fetch is retried on the next ingest. The ETF price chart shows that whole history, the
+value chart still starts at the first trade.

@@ -7,12 +7,14 @@ from portfolio import ingest, web
 from portfolio.db import connect
 
 
-def create_app(db_path: str | Path, ingest_token: str, notify=None) -> FastAPI:
-    """`notify` sends a crossover alert's text (see `signals.telegram_sender`); None only records crossovers."""
+def create_app(db_path: str | Path, ingest_token: str, notify=None, history=None) -> FastAPI:
+    """`notify` sends a crossover alert's text (see `signals.telegram_sender`); None only records crossovers.
+    `history` fetches an ETF's older closes (see `history.justetf`); None skips the backfill."""
     app = FastAPI(title="portfolio-dashboard", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.conn = connect(db_path)
     app.state.token = ingest_token
     app.state.notify = notify
+    app.state.history = history
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
     app.include_router(ingest.router)
     app.include_router(web.router)
