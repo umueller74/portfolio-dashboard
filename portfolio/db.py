@@ -26,6 +26,7 @@ create table if not exists meta(key text primary key, value text not null);
 create table if not exists signals(
   isin text primary key, state text not null check (state in ('above','below')), day text not null
 );
+create table if not exists backfills(isin text primary key, fetched_at text not null, points integer not null);
 """
 
 

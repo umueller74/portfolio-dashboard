@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from portfolio import signals
+from portfolio import history, signals
 
 router = APIRouter(prefix="/api")
 
@@ -85,7 +85,9 @@ async def ingest(body: IngestIn, request: Request, tasks: BackgroundTasks):
             " on conflict(key) do update set value=excluded.value",
             (body.fetched_at.isoformat(),),
         )
-    # crossover alerts after the response; runs in the threadpool so a slow Telegram call never blocks requests
+    # after the response, in the threadpool so slow calls never block requests: first older closes for ETFs
+    # not backfilled yet (so the 200-day average sees them), then crossover alerts
+    tasks.add_task(history.backfill, conn, request.app.state.history)
     tasks.add_task(signals.check, conn, datetime.now(timezone.utc), request.app.state.notify)
     return {"trades": len(body.trades), "closes": len(body.closes), "quotes": len(body.quotes)}
 

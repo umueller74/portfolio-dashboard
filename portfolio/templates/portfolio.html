@@ -89,7 +89,7 @@ Chart.defaults.borderColor = 'rgba(255,255,255,.08)';
 Chart.defaults.maintainAspectRatio = false;
 Chart.defaults.font.size = 10.8;
 
-let isin = '', rangeKey = {{ range|tojson }}, offset = 0, charts = [];
+let isin = '', rangeKey = {{ range|tojson }}, charts = [];
 const view = () => D.views[isin];
 const etfName = () => D.names[D.isins.indexOf(isin)];
 
@@ -116,16 +116,20 @@ const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
 const GRID = 'rgba(255,255,255,.08)';
 const xTicks = {autoSkip: false, maxRotation: 0, callback(val, i) {
   const labels = this.chart.data.labels, m = MODES[rangeKey];
-  return i === 0 || periodOf(labels[i], m) !== periodOf(labels[i - 1], m) ? showOf(labels[i], m) : '';
+  if (i === 0) {   // the first label is dropped when the next period starts so soon that the two would overlap
+    const next = labels.findIndex(l => periodOf(l, m) !== periodOf(labels[0], m));
+    return next > 0 && next < labels.length / 25 ? '' : showOf(labels[0], m);
+  }
+  return periodOf(labels[i], m) !== periodOf(labels[i - 1], m) ? showOf(labels[i], m) : '';
 }};
 
-// markers: same trade days on both charts, y taken from that chart's own series
+// markers: same trades on both charts, on each chart's own days, y taken from that chart's own series
 const markerSets = [['Savings plan buy', 'plan_buy', GREEN, 'circle', 0], ['One-off buy', 'cash_buy', ORANGE, 'triangle', 0],
                     ['Sell', 'sell', RED, 'triangle', 180]];
-const markerDatasets = ys => markerSets.map(([label, key, color, style, rot]) => ({
-  label, data: view().markers[key].map((m, i) => m === null ? null : ys[i]), borderColor: color, backgroundColor: color,
+const markerDatasets = (markers, ys) => markerSets.map(([label, key, color, style, rot]) => ({
+  label, data: markers[key].map((m, i) => m === null ? null : ys[i]), borderColor: color, backgroundColor: color,
   showLine: false, tradeKind: key, pointStyle: style, pointRadius: 6, pointHoverRadius: 8, pointRotation: rot, order: 0}));
-const tipLines = items => view().markers.tooltips[offset + items[0].dataIndex];
+const tipLines = items => { const ch = items[0].chart; return ch.markers.tooltips[ch.offset + items[0].dataIndex]; };
 const options = nLines => ({interaction: {mode: 'index', intersect: false},
   scales: {x: {ticks: xTicks, grid: {color: c => c.tick && c.tick.label ? GRID : 'transparent'}}},
   plugins: {legend: {labels: {usePointStyle: true}},
@@ -147,11 +151,12 @@ function build() {
   const specs = [
     ['valueChart', [{label: 'Value (EUR)', data: v.values, borderColor: '#60a5fa', pointRadius: 0, tension: .1, order: 2},
                     {label: 'Invested (EUR)', data: v.invested, borderColor: '#9ca3af', pointRadius: 0, borderDash: [5, 4], order: 3},
-                    ...markerDatasets(v.values)], 2],
-    ['pnlChart', [second, ...averages, ...markerDatasets(v.second)], 1 + averages.length]];
-  charts = specs.map(([el, datasets, lines]) => {
-    const chart = new Chart(document.getElementById(el), {type: 'line', data: {labels: v.labels, datasets}, options: options(lines), plugins: [tradeLines]});
-    chart.full = datasets.map(d => d.data);
+                    ...markerDatasets(v.markers, v.values)], 2, v.labels, v.markers],
+    // the price chart has its own days: an ETF's price history reaches back before its first trade
+    ['pnlChart', [second, ...averages, ...markerDatasets(v.pmarkers, v.second)], 1 + averages.length, v.plabels, v.pmarkers]];
+  charts = specs.map(([el, datasets, lines, labels, markers]) => {
+    const chart = new Chart(document.getElementById(el), {type: 'line', data: {labels, datasets}, options: options(lines), plugins: [tradeLines]});
+    Object.assign(chart, {full: datasets.map(d => d.data), labelsFull: labels, markers, offset: 0});
     return chart;
   });
   maxBtn.hidden = all;
@@ -170,17 +175,16 @@ maxBtn.onclick = () => maximize(!plBox.classList.contains('max'));
 document.addEventListener('keydown', e => { if (e.key === 'Escape') maximize(false); });
 
 function applyRange() {
-  const v = view();
-  let start = 0;
+  let cutoff = '';
   if (D.rangeDays[rangeKey]) {
     const d = new Date(D.today + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - D.rangeDays[rangeKey]);
-    const cutoff = d.toISOString().slice(0, 10);
-    start = v.labels.findIndex(l => l >= cutoff);
-    if (start < 0) start = v.labels.length;
+    cutoff = d.toISOString().slice(0, 10);
   }
-  offset = start;
   for (const ch of charts) {
-    ch.data.labels = v.labels.slice(start);
+    let start = ch.labelsFull.findIndex(l => l >= cutoff);
+    if (start < 0) start = ch.labelsFull.length;
+    ch.offset = start;
+    ch.data.labels = ch.labelsFull.slice(start);
     ch.data.datasets.forEach((ds, i) => ds.data = ch.full[i].slice(start));
     ch.update();
   }

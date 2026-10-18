@@ -109,6 +109,19 @@ def test_etf_view_has_20_and_50_day_averages_and_a_maximize_button(client):
     assert 'id="plMax"' in client.get("/").text
 
 
+def test_etf_price_chart_covers_closes_from_before_the_first_trade(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-06T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": d, "price": p} for d, p in
+                 [("2019-03-01", "50"), ("2025-12-31", "98"), ("2026-01-06", "100"), ("2026-01-07", "104")]])
+    v = view_data(client.app.state.conn, ISIN)
+    assert v["labels"] == ["2026-01-06", "2026-01-07"]               # value chart: from the first trade
+    assert v["plabels"] == ["2019-03-01", "2025-12-31", "2026-01-06", "2026-01-07"]   # price chart: all of it
+    assert v["second"] == [50.0, 98.0, 100.0, 104.0] and len(v["ma20"]) == 4
+    assert v["pmarkers"]["cash_buy"] == [None, None, 100.0, None]
+    p = view_data(client.app.state.conn, None)
+    assert p["plabels"] == p["labels"] and p["pmarkers"] == p["markers"]
+
+
 def test_maximized_price_chart_has_its_own_range_buttons(client):
     seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
     html = client.get("/?range=3m").text

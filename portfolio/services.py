@@ -34,7 +34,7 @@ def _closes(conn) -> dict[str, list[tuple[date, Decimal]]]:
 def _price_on(rows: list[tuple[date, Decimal]] | None, day: date) -> Decimal | None:
     if not rows:
         return None
-    i = bisect_right([d for d, _ in rows], day)
+    i = bisect_right(rows, day, key=lambda r: r[0])
     return rows[i - 1][1] if i else None
 
 
@@ -159,7 +159,7 @@ def moving_averages(conn, isin: str, days: list[date], windows=(20, 50)) -> dict
     Uses every stored close, so the averages are complete from the chart's first day whenever enough
     closes precede it; None where fewer than n closes exist yet."""
     rows = _closes(conn).get(isin, [])
-    ends = [bisect_right([d for d, _ in rows], day) for day in days]
+    ends = [bisect_right(rows, day, key=lambda r: r[0]) for day in days]
     return {n: [float(sum(p for _, p in rows[i - n:i]) / n) if i >= n else None for i in ends] for n in windows}
 
 
