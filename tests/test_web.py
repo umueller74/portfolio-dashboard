@@ -106,7 +106,9 @@ def test_etf_view_has_20_and_50_day_averages_and_a_maximize_button(client):
     v = view_data(client.app.state.conn, ISIN)
     assert v["ma20"] == [None] and v["ma50"] == [None]
     assert "ma20" not in view_data(client.app.state.conn, None)
-    assert 'id="plMax"' in client.get("/").text
+    html = client.get("/").text
+    assert 'id="plMax"' in html
+    assert "plBox.addEventListener('click'" in html and "cursor:zoom-in" in html   # a click into the chart maximizes too
 
 
 def test_etf_price_chart_covers_closes_from_before_the_first_trade(client):
