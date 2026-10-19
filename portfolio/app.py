@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from portfolio import ingest, web
@@ -17,6 +18,7 @@ def create_app(db_path: str | Path, ingest_token: str, notify=None, history=None
     app.state.notify = notify
     app.state.history = history
     app.state.trigger = trigger
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
     app.include_router(ingest.router)
     app.include_router(web.router)

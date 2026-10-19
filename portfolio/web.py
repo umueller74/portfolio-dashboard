@@ -157,11 +157,22 @@ async def portfolio_page(request: Request, range: str = "1y"):
     today = date.today()
     ov = services.overview(conn, today)
     tabs = etf_tabs(conn, ov)
-    views = {"": view_data(conn, None), **{t["isin"]: view_data(conn, t["isin"]) for t in tabs}}
+    # only the portfolio view; the page fetches each ETF's from /view/{isin} in the background
     return templates.TemplateResponse(request, "portfolio.html", _ctx(
         request, ov=ov, range=range if range in RANGES else "1y", ranges=RANGES,
         range_days=services.RANGE_DAYS, today=today.isoformat(),
-        tabs=tabs, views=views, cards=card_texts(conn, ov, today, [t["isin"] for t in tabs])))
+        tabs=tabs, views={"": view_data(conn, None)}, cards=card_texts(conn, ov, today, [])))
+
+
+@router.get("/view/{isin}")
+def etf_view(request: Request, isin: str):
+    """One ETF's chart data and info box texts, as the portfolio page holds them in `D.views` and `D.cards`."""
+    conn = request.app.state.conn
+    if not conn.execute("select 1 from trades where isin=?", (isin,)).fetchone():
+        return JSONResponse({"error": "unknown ETF"}, status_code=404)
+    today = date.today()
+    ov = services.overview(conn, today)
+    return {"view": view_data(conn, isin), "cards": card_texts(conn, ov, today, [isin]).get(isin, {})}
 
 
 @router.get("/etf")

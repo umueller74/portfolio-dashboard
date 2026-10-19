@@ -7,6 +7,7 @@
  .card b{display:block;font-size:1.5rem;margin-top:.2rem}.card.key b{font-size:2rem}
  .bar{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:1rem}
  .charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin-bottom:1.5rem}
+ .charts.loading canvas{opacity:.35}
  .chart{background:var(--panel);border-radius:.8rem;padding:.8rem}.chart h3{margin:0 0 .5rem;font-size:1rem;color:var(--muted)}
  .chart div{position:relative;height:clamp(7rem,14vw,17rem)}
  .chart h3{display:flex;justify-content:space-between;align-items:center}
@@ -94,6 +95,20 @@ Chart.defaults.font.size = 10.8;
 let isin = '', rangeKey = {{ range|tojson }}, charts = [];
 const view = () => D.views[isin];
 const etfName = () => D.names[D.isins.indexOf(isin)];
+
+// the page carries the portfolio view only; each ETF's view comes from /view/{isin}, once, and stays in D
+const loading = {};
+function load(i) {
+  if (D.views[i]) return Promise.resolve();
+  return loading[i] ??= fetch('/view/' + encodeURIComponent(i))
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(d => { D.views[i] = d.view; D.cards[i] = d.cards; })
+    .finally(() => { delete loading[i]; });   // a failed load is tried again on the next click
+}
+// in the background, one after the other in button order; a clicked ETF is fetched right away instead
+async function preload() {
+  for (const i of D.isins) await load(i).catch(() => {});
+}
 
 // x axis: hour, day of month, month or year depending on the visible span (about 1d, up to 1m, up to 1.5y, more);
 // a label only where a new period starts. Labels are days ("YYYY-MM-DD") or, for every price point, Berlin minutes
@@ -270,6 +285,9 @@ plBox.addEventListener('click', () => { if (!maxBtn.hidden && !dragged) maximize
 document.addEventListener('keydown', e => { if (e.key === 'Escape') maximize(false); });
 
 function applyRange() {
+  document.querySelectorAll('.btn[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === rangeKey));
+  history.replaceState(null, '', '?range=' + rangeKey);
+  if (!view()) return;   // the ETF is still loading: build() applies the range when it is in
   for (const ch of charts) {
     const v = ch.variants.ticks && TICK_RANGES.includes(rangeKey) ? ch.variants.ticks : ch.variants.daily;
     ch.data.ticksShown = v === ch.variants.ticks;   // trendlines exist only over every price point
@@ -291,11 +309,9 @@ function applyRange() {
     if (ch.variants.ticks) ch.data.datasets[0].pointRadius = v.pointRadius || 0;   // every price point as a dot
     ch.update();
   }
-  document.querySelectorAll('.btn[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === rangeKey));
   const c = D.cards[isin][rangeKey];
   for (const k of ['value', 'value_sub', 'invested', 'invested_sub', 'pnl', 'pnl_sub', 'xirr', 'session']) document.getElementById('c-' + k).textContent = c[k];
   document.getElementById('c-pnl').className = c.pnl_pos ? 'pos' : 'neg';
-  history.replaceState(null, '', '?range=' + rangeKey);
 }
 // the ETF price chart moves: wheel zooms the time axis around the pointer, a left drag pans it (into the future
 // too), ctrl+wheel scales the y axis around the pointer; a double-click or a range button resets the window
@@ -371,11 +387,20 @@ heads.forEach((h, i) => h.onclick = () => {
   sortDir = i === sortCol && sortDir === 'asc' ? 'desc' : 'asc';
   sortCol = i; renderTable();
 });
+const chartsBox = document.querySelector('.charts');
 document.querySelectorAll('#etfs .btn').forEach(b => b.onclick = () => {
-  isin = b.dataset.isin;
+  const want = isin = b.dataset.isin;
   document.querySelectorAll('#etfs .btn').forEach(x => x.classList.toggle('active', x === b));
-  build(); renderTable();
+  renderTable();
+  if (view()) { chartsBox.classList.remove('loading'); build(); return; }
+  // not in yet: the old charts stay, dimmed, until it is; a later click elsewhere wins
+  chartsBox.classList.add('loading');
+  document.getElementById('viTitle').textContent = 'Loading ' + etfName() + ' …';
+  load(want).then(() => { if (isin === want) { chartsBox.classList.remove('loading'); build(); } },
+                  () => { if (isin === want) document.getElementById('viTitle').textContent =
+                    etfName() + ' could not be loaded - click it to try again'; });
 });
 build(); renderTable();
+preload();
 </script>
 {% endif %}{% endblock %}
