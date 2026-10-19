@@ -48,7 +48,7 @@
 <div class="charts">
  <div class="chart"><h3 id="viTitle">Value and invested (EUR)</h3><div><canvas id="valueChart"></canvas></div></div>
  <div class="chart"><h3><span id="plTitle">Profit / Loss (EUR)</span>
-  <span class="maxranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</span><button class="maxbtn" id="plTrend" title="Trendlines of the last day, week and month (shown in the 1d, 1w and 1m ranges)" aria-pressed="false" hidden>Trendlines</button><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
+  <span class="maxranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</span><button class="maxbtn" id="plTrend" title="Trendlines of the last day, week and month (shown in the 1d, 1w and 1m ranges; switches to 1m from longer ones)" aria-pressed="false" hidden>Trendlines</button><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
 </div>
 
 <div class="split">
@@ -229,6 +229,8 @@ trendBtn.onclick = e => {
   // all six at once, also those hidden one by one in the legend
   charts[1].data.datasets.forEach((ds, i) => { if (ds.trend) charts[1].setDatasetVisibility(i, trendOn); });
   charts[1].update();
+  // they exist over every price point only: from a range of daily closes, go to the widest one that has them
+  if (trendOn && charts[1].variants.ticks && !TICK_RANGES.includes(rangeKey)) { rangeKey = '1m'; applyRange(); }
 };
 maxBtn.onclick = e => { e.stopPropagation(); maximize(!plBox.classList.contains('max')); };
 plBox.addEventListener('click', () => { if (!maxBtn.hidden) maximize(true); });
