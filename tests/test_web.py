@@ -1,3 +1,4 @@
+import json
 import re
 
 from portfolio import services
@@ -154,6 +155,43 @@ def test_price_chart_has_a_trendline_button(client):
     assert 'id="plTrend"' in html and "aria-pressed=\"false\"" in html     # off by default
     # the price chart moves: wheel zoom, drag pan, ctrl+wheel y scale, future slots for the trendlines
     assert "addEventListener('wheel'" in html and "e.ctrlKey" in html and "futureLabels" in html
+
+
+def page_data(html: str) -> dict:
+    return json.loads(re.search(r"const D = (\{.*?\});\n", html, re.S).group(1))
+
+
+def test_page_carries_only_the_portfolio_view_and_serves_each_etf_on_request(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin="IE0000000002")],
+         closes=[{"isin": ISIN, "day": "2026-10-09", "price": "110"},
+                 {"isin": "IE0000000002", "day": "2026-10-09", "price": "60"}])
+    d = page_data(client.get("/").text)
+    assert list(d["views"]) == [""] and list(d["cards"]) == [""]
+    assert d["isins"] == [ISIN, "IE0000000002"]                      # what the page loads in the background
+    r = client.get(f"/view/{ISIN}")
+    assert r.status_code == 200
+    assert r.json()["view"] == json.loads(json.dumps(view_data(client.app.state.conn, ISIN)))
+    assert r.json()["cards"]["1y"]["value"] == "550.00 €"
+    assert client.get("/view/IE9999999999").status_code == 404
+
+
+def test_cached_rows_follow_every_write(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": "2026-10-08", "price": "100"}])
+    conn = client.app.state.conn
+    assert len(services._closes(conn)[ISIN]) == 1 and len(services.load_trades(conn)) == 1
+    client.post("/api/ingest", headers=AUTH, json=payload(
+        trades=[trade("b", "BUY", "1", "100", "2026-02-05T10:00:00Z")],
+        closes=[{"isin": ISIN, "day": "2026-10-09", "price": "110"}], quotes=[]))
+    assert len(services._closes(conn)[ISIN]) == 2 and len(services.load_trades(conn)) == 2
+
+
+def test_responses_are_gzipped(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": "2026-10-09", "price": "110"}])
+    for url in ("/", f"/view/{ISIN}"):
+        assert client.get(url, headers={"Accept-Encoding": "gzip"}).headers.get("content-encoding") == "gzip"
 
 
 class FakeTrigger:

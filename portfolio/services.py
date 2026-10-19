@@ -16,19 +16,32 @@ def _day(dt: datetime) -> date:
     return dt.astimezone(BERLIN).date()
 
 
+_cache: dict = {}
+
+
+def _cached(conn, key: str, load):
+    """`load(conn)` once per state of the database: a page asks for the same rows many times. The app writes
+    through this one connection, so its change counter moves with every write. Callers must not mutate the result."""
+    hit = _cache.get(key)
+    if hit is None or hit[0] is not conn or hit[1] != conn.total_changes:
+        hit = _cache[key] = (conn, conn.total_changes, load(conn))
+    return hit[2]
+
+
 def load_trades(conn) -> list[Trade]:
-    return [
+    return list(_cached(conn, "trades", lambda c: [
         Trade(r["id"], r["isin"], r["name"], r["side"], r["kind"], datetime.fromisoformat(r["executed_at"]),
               Decimal(r["quantity"]), Decimal(r["price"]), Decimal(r["fee"]))
-        for r in conn.execute("select * from trades order by executed_at, id")
-    ]
+        for r in c.execute("select * from trades order by executed_at, id")]))
 
 
 def _closes(conn) -> dict[str, list[tuple[date, Decimal]]]:
-    out: dict[str, list[tuple[date, Decimal]]] = {}
-    for r in conn.execute("select isin, day, price from closes order by isin, day"):
-        out.setdefault(r["isin"], []).append((date.fromisoformat(r["day"]), Decimal(r["price"])))
-    return out
+    def load(c):
+        out: dict[str, list[tuple[date, Decimal]]] = {}
+        for r in c.execute("select isin, day, price from closes order by isin, day"):
+            out.setdefault(r["isin"], []).append((date.fromisoformat(r["day"]), Decimal(r["price"])))
+        return out
+    return _cached(conn, "closes", load)
 
 
 def ticks(conn, isin: str) -> list[tuple[datetime, Decimal]]:
@@ -141,20 +154,30 @@ def value_series(conn, isin: str | None = None) -> list[SeriesPoint]:
     first = _day(trades[0].executed_at)
     sources = closes.values() if isin is None else [closes.get(isin, [])]
     days = sorted({d for rows in sources for d, _ in rows if d >= first})
+    # the trades up to a day are a prefix of these; holdings only change on a trade day, so replay only then
+    trades.sort(key=lambda t: (_day(t.executed_at), t.executed_at, t.id))
+    trade_days = [_day(t.executed_at) for t in trades]
+    held: dict[str, tuple[Decimal, Decimal]] = {}   # isin -> (quantity, cost) still held
+    count = -1
     series: list[SeriesPoint] = []
     for day in days:
-        upto = [t for t in trades if _day(t.executed_at) <= day]
-        try:
-            lots, _ = replay(upto)
-        except OversellError:
-            return []
+        n = bisect_right(trade_days, day)
+        if n != count:
+            count = n
+            try:
+                lots, _ = replay(trades[:n])
+            except OversellError:
+                return []
+            held = {}
+            for lot in lots:
+                if lot.remaining > 0:
+                    q, c = held.get(lot.trade.isin, (Decimal(0), Decimal(0)))
+                    held[lot.trade.isin] = (q + lot.remaining, c + lot.cost)
         value = invested = Decimal(0)
-        for lot in lots:
-            if lot.remaining <= 0:
-                continue
-            price = _price_on(closes.get(lot.trade.isin), day)
-            invested += lot.cost
-            value += lot.remaining * price if price is not None else lot.cost
+        for i, (q, c) in held.items():
+            price = _price_on(closes.get(i), day)
+            invested += c
+            value += q * price if price is not None else c
         price = _price_on(closes.get(isin), day) if isin else None
         series.append(SeriesPoint(day, float(value), float(invested), float(price) if price is not None else None))
     return series
