@@ -62,6 +62,19 @@ async def collect(call, state_dir, timeframes=normalize.KNOWN_TIMEFRAMES) -> dic
             "ticks": sorted(ticks.values(), key=lambda t: (t["isin"], t["at"]))}
 
 
+async def chart_timeframes(session) -> list[str]:
+    """The timeframes get_security_chart accepts, from the server's tool list. Never fails the run: on any
+    error the known ones are used. mcp 2.0 calls the schema `input_schema` (1.x: `inputSchema`)."""
+    try:
+        tools = (await session.list_tools()).tools
+        return normalize.chart_timeframes([
+            {"name": t.name, "inputSchema": getattr(t, "input_schema", None) or getattr(t, "inputSchema", None)}
+            for t in tools])
+    except Exception as e:
+        log.warning("reading the chart timeframes failed, using the known ones: %s", e)
+        return list(normalize.KNOWN_TIMEFRAMES)
+
+
 def push(body: dict, ingest_url: str, ingest_token: str, opener=urllib.request.urlopen) -> None:
     """Standard library only: Hermes' interpreter has no `httpx`. HTTPError (non-2xx) propagates."""
     req = urllib.request.Request(
@@ -92,8 +105,7 @@ async def _main() -> None:
                         raise RuntimeError(f"{tool} failed: {text}")
                     return json.loads(text)
 
-                tools = (await session.list_tools()).tools
-                timeframes = normalize.chart_timeframes([{"name": t.name, "inputSchema": t.inputSchema} for t in tools])
+                timeframes = await chart_timeframes(session)
                 log.info("chart timeframes: %s", ", ".join(timeframes))
                 body = await collect(call, os.environ["STATE_DIR"], timeframes)
     push(body, os.environ["INGEST_URL"], os.environ["INGEST_TOKEN"])
