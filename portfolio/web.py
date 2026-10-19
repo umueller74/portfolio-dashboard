@@ -152,16 +152,19 @@ async def healthz():
 
 
 @router.get("/")
-async def portfolio_page(request: Request, range: str = "1y"):
+async def portfolio_page(request: Request, range: str = "1y", etf: str = ""):
     conn = request.app.state.conn
     today = date.today()
     ov = services.overview(conn, today)
     tabs = etf_tabs(conn, ov)
-    # only the portfolio view; the page fetches each ETF's from /view/{isin} in the background
+    # the portfolio view, plus the ETF the page opens on (`etf`, kept in the URL so a reload returns to it);
+    # the page fetches the other ETFs' from /view/{isin} in the background
+    etf = etf if etf in {t["isin"] for t in tabs} else ""
+    views = {"": view_data(conn, None), **({etf: view_data(conn, etf)} if etf else {})}
     return templates.TemplateResponse(request, "portfolio.html", _ctx(
         request, ov=ov, range=range if range in RANGES else "1y", ranges=RANGES,
-        range_days=services.RANGE_DAYS, today=today.isoformat(),
-        tabs=tabs, views={"": view_data(conn, None)}, cards=card_texts(conn, ov, today, [])))
+        range_days=services.RANGE_DAYS, today=today.isoformat(), etf=etf,
+        tabs=tabs, views=views, cards=card_texts(conn, ov, today, [etf] if etf else [])))
 
 
 @router.get("/view/{isin}")
