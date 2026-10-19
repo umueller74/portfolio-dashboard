@@ -95,3 +95,22 @@ async def test_collect_stores_every_chart_point_of_every_timeframe_as_ticks(tmp_
     assert [(t["at"], t["price"]) for t in one] == [("2026-10-09T08:00:00+00:00", "99"), ("2026-10-09T20:59:56+00:00", "100")]
     assert [c["day"] for c in body["closes"] if c["isin"] == "IE0000000001"] == ["2026-10-09"]   # closes: year_to_date only
     assert ("get_security_chart", {"isin": "IE0000000001", "timeframe": "broken"}) in log
+
+
+async def test_chart_timeframes_read_mcp_2_tools_and_fall_back_on_errors():
+    from types import SimpleNamespace as NS
+    schema = {"properties": {"timeframe": {"enum": ["one_day", "year_to_date"]}}}
+
+    class Session:
+        def __init__(self, tools=None, fail=False):
+            self.tools, self.fail = tools, fail
+
+        async def list_tools(self):
+            if self.fail:
+                raise RuntimeError("list_tools failed")
+            return NS(tools=self.tools)
+
+    # mcp 2.0 names it input_schema (1.x: inputSchema)
+    assert await run.chart_timeframes(Session([NS(name="get_security_chart", input_schema=schema)])) == ["one_day", "year_to_date"]
+    assert await run.chart_timeframes(Session([NS(name="get_security_chart", inputSchema=schema)])) == ["one_day", "year_to_date"]
+    assert await run.chart_timeframes(Session(fail=True)) == list(run.normalize.KNOWN_TIMEFRAMES)
