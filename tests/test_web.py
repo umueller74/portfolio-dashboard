@@ -154,3 +154,80 @@ def test_price_chart_has_a_trendline_button(client):
     assert 'id="plTrend"' in html and "aria-pressed=\"false\"" in html     # off by default
     # the price chart moves: wheel zoom, drag pan, ctrl+wheel y scale, future slots for the trendlines
     assert "addEventListener('wheel'" in html and "e.ctrlKey" in html and "futureLabels" in html
+
+
+class FakeTrigger:
+    def __init__(self, post=(202, {"status": "started"}), get=(200, {"running": True, "last_exit": None})):
+        self.replies, self.calls = {"POST": post, "GET": get}, []
+
+    def __call__(self, method):
+        self.calls.append(method)
+        reply = self.replies[method]
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+XHR = {"X-Requested-With": "fetch"}
+
+
+def trigger_client(tmp_path, trigger):
+    from fastapi.testclient import TestClient
+    from portfolio.app import create_app
+    return TestClient(create_app(tmp_path / "p.db", "test-token", trigger=trigger))
+
+
+def test_fetch_button_only_with_a_trigger(client, tmp_path):
+    assert 'id="fetchNow"' not in client.get("/").text
+    assert client.post("/fetch", headers=XHR).status_code == 404
+    assert 'id="fetchNow"' in trigger_client(tmp_path, FakeTrigger()).get("/").text
+
+
+def test_fetch_starts_the_fetcher_and_reports_its_state(tmp_path):
+    trig = FakeTrigger()
+    c = trigger_client(tmp_path, trig)
+    r = c.post("/fetch", headers=XHR)
+    assert r.status_code == 202 and r.json() == {"status": "started"}
+    c.post("/api/ingest", json=payload(), headers=AUTH)
+    assert c.get("/fetch").json() == {"last_ingest": "2026-10-11T21:30:00+00:00", "running": True, "last_exit": None}
+    assert trig.calls == ["POST", "GET"]
+
+
+def test_fetch_already_running_is_passed_on(tmp_path):
+    r = trigger_client(tmp_path, FakeTrigger(post=(409, {"status": "running"}))).post("/fetch", headers=XHR)
+    assert r.status_code == 409 and r.json() == {"status": "running"}
+
+
+def test_fetch_needs_the_script_header(tmp_path):
+    trig = FakeTrigger()
+    assert trigger_client(tmp_path, trig).post("/fetch").status_code == 403   # a cross-site form cannot set it
+    assert trig.calls == []
+
+
+def test_unreachable_fetcher_is_a_502(tmp_path):
+    c = trigger_client(tmp_path, FakeTrigger(post=OSError("connection refused"), get=OSError("timed out")))
+    r = c.post("/fetch", headers=XHR)
+    assert r.status_code == 502 and "connection refused" in r.json()["error"]
+    assert c.get("/fetch").json() == {"last_ingest": None, "error": "fetcher unreachable: timed out"}
+
+
+def test_trigger_client_calls_the_listener_with_the_token():
+    import io
+    import urllib.error
+    from portfolio.refresh import trigger_client as make
+    assert make(None, "x") is None
+    seen = []
+
+    class Resp(io.BytesIO):
+        status = 200
+
+    def opener(req, timeout):
+        seen.append((req.method, req.full_url, req.get_header("Authorization")))
+        if req.method == "POST":
+            raise urllib.error.HTTPError(req.full_url, 409, "busy", {}, io.BytesIO(b'{"status": "running"}'))
+        return Resp(b'{"running": false, "last_exit": 0}')
+
+    call = make("http://raspi2:8770/fetch", "tok", opener)
+    assert call("POST") == (409, {"status": "running"})
+    assert call("GET") == (200, {"running": False, "last_exit": 0})
+    assert seen == [("POST", "http://raspi2:8770/fetch", "Bearer tok"), ("GET", "http://raspi2:8770/fetch", "Bearer tok")]

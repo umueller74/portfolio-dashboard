@@ -17,10 +17,32 @@
  .btn{background:transparent;color:var(--text);border:2px solid var(--orange);border-radius:.6rem;padding:.35rem .9rem;
   font:inherit;cursor:pointer}
  .btn:hover{background:rgba(242,140,40,.18)}.btn.active{background:var(--orange);color:#1f1f1f;font-weight:600}
+ .fetchbtn{padding:.1rem .6rem;margin-left:.6rem;font-size:.85rem}.fetchbtn:disabled{opacity:.5;cursor:wait}
  {% block style %}{% endblock %}
 </style></head><body>
 <main>
-{% if stale %}<div class="stale">{% if last_ingest %}Last updated {{ last_ingest.strftime('%Y-%m-%d %H:%M') }} UTC, data may be stale.{% else %}No data yet. The fetcher has not delivered anything.{% endif %}</div>
-{% else %}<p class="muted" style="margin-top:0">Last updated {{ last_ingest.strftime('%Y-%m-%d %H:%M') }} UTC</p>{% endif %}
+{% macro fetch_now() %}{% if fetch_enabled %} <button class="btn fetchbtn" id="fetchNow" data-last="{{ last_ingest.isoformat() if last_ingest else '' }}" title="Run the fetcher now; the page reloads when its data has arrived">Fetch now</button> <span id="fetchMsg"></span>{% endif %}{% endmacro %}
+{% if stale %}<div class="stale">{% if last_ingest %}Last updated {{ last_ingest.strftime('%Y-%m-%d %H:%M') }} UTC, data may be stale.{% else %}No data yet. The fetcher has not delivered anything.{% endif %}{{ fetch_now() }}</div>
+{% else %}<p class="muted" style="margin-top:0">Last updated {{ last_ingest.strftime('%Y-%m-%d %H:%M') }} UTC{{ fetch_now() }}</p>{% endif %}
 {% block body %}{% endblock %}
-</main></body></html>
+</main>
+{% if fetch_enabled %}<script>
+// "Fetch now": starts the fetcher on its host, then polls until a newer ingest has arrived and reloads
+document.getElementById('fetchNow').onclick = async e => {
+  const btn = e.currentTarget, msg = document.getElementById('fetchMsg'), before = btn.dataset.last;
+  const done = text => { msg.textContent = text; btn.disabled = false; };
+  btn.disabled = true; msg.textContent = 'fetching…';
+  try {
+    const r = await fetch('/fetch', {method: 'POST', headers: {'X-Requested-With': 'fetch'}});
+    if (r.status !== 202 && r.status !== 409) return done('failed: ' + ((await r.json()).error || r.status));
+    for (let waited = 0; waited < 600; waited += 5) {
+      await new Promise(ok => setTimeout(ok, 5000));
+      const s = await (await fetch('/fetch')).json();
+      if (s.last_ingest && s.last_ingest !== before) return location.reload();
+      if (s.error) return done('failed: ' + s.error);
+      if (s.running === false) return done(`fetch failed (exit ${s.last_exit}), see journalctl -u portfolio-fetcher-trigger`);
+    }
+    done('no new data after 10 minutes');
+  } catch (err) { done('failed: ' + err); }
+};
+</script>{% endif %}</body></html>

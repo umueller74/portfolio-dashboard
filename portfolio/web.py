@@ -2,8 +2,8 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import APIRouter, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Header, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
 from portfolio import services
@@ -43,7 +43,8 @@ def _last_ingest(conn) -> datetime | None:
 def _ctx(request: Request, **extra) -> dict:
     last = _last_ingest(request.app.state.conn)
     age_h = (datetime.now(timezone.utc) - last).total_seconds() / 3600 if last else None
-    return {"last_ingest": last, "stale": last is None or age_h > STALE_AFTER_HOURS, **extra}
+    return {"last_ingest": last, "stale": last is None or age_h > STALE_AFTER_HOURS,
+            "fetch_enabled": request.app.state.trigger is not None, **extra}
 
 
 def marker_series(markers: dict, labels: list[date], values: list[float]) -> dict:
@@ -173,6 +174,36 @@ async def etf_list(request: Request):
 async def etf_detail(request: Request, isin: str):
     detail = services.isin_detail(request.app.state.conn, isin)
     return templates.TemplateResponse(request, "etf_detail.html", _ctx(request, isin=isin, d=detail))
+
+
+# "Fetch now": not under /api, so the page's basicAuth guards it; the header keeps cross-site forms out
+@router.post("/fetch")
+def fetch_now(request: Request, x_requested_with: str = Header(default="")):
+    trigger = request.app.state.trigger
+    if trigger is None:
+        return JSONResponse({"error": "no fetch trigger configured"}, status_code=404)
+    if x_requested_with != "fetch":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        code, body = trigger("POST")
+    except OSError as e:
+        return JSONResponse({"error": f"fetcher unreachable: {e}"}, status_code=502)
+    return JSONResponse(body, status_code=code)
+
+
+@router.get("/fetch")
+def fetch_state(request: Request):
+    """What the page polls after "Fetch now": the last ingest (a new one means done) and the fetcher's state."""
+    last = _last_ingest(request.app.state.conn)
+    out = {"last_ingest": last.isoformat() if last else None}
+    trigger = request.app.state.trigger
+    if trigger is None:
+        return JSONResponse({"error": "no fetch trigger configured"}, status_code=404)
+    try:
+        out.update(trigger("GET")[1])
+    except OSError as e:
+        out["error"] = f"fetcher unreachable: {e}"
+    return out
 
 
 @router.get("/metrics", response_class=PlainTextResponse)
