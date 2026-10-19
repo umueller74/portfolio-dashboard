@@ -84,7 +84,7 @@
 
 <script src="/static/chart.umd.min.js"></script>
 <script>
-const D = {{ {'views': views, 'today': today, 'rangeDays': range_days,
+const D = {{ {'views': views, 'today': today, 'rangeDays': range_days, 'etf': etf,
               'cards': cards, 'names': tabs|map(attribute='name')|list, 'isins': tabs|map(attribute='isin')|list}|tojson }};
 const GREEN = '#4ade80', RED = '#f87171', ORANGE = '#fb923c';
 Chart.defaults.color = '#c3c8cf';
@@ -284,9 +284,12 @@ maxBtn.onclick = e => { e.stopPropagation(); maximize(!plBox.classList.contains(
 plBox.addEventListener('click', () => { if (!maxBtn.hidden && !dragged) maximize(true); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') maximize(false); });
 
+// range and ETF live in the URL, so a reload (e.g. after "Fetch now") comes back to the same view
+const syncUrl = () => history.replaceState(null, '', '?range=' + rangeKey + (isin ? '&etf=' + encodeURIComponent(isin) : ''));
+
 function applyRange() {
   document.querySelectorAll('.btn[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === rangeKey));
-  history.replaceState(null, '', '?range=' + rangeKey);
+  syncUrl();
   if (!view()) return;   // the ETF is still loading: build() applies the range when it is in
   for (const ch of charts) {
     const v = ch.variants.ticks && TICK_RANGES.includes(rangeKey) ? ch.variants.ticks : ch.variants.daily;
@@ -391,7 +394,7 @@ const chartsBox = document.querySelector('.charts');
 document.querySelectorAll('#etfs .btn').forEach(b => b.onclick = () => {
   const want = isin = b.dataset.isin;
   document.querySelectorAll('#etfs .btn').forEach(x => x.classList.toggle('active', x === b));
-  renderTable();
+  renderTable(); syncUrl();
   if (view()) { chartsBox.classList.remove('loading'); build(); return; }
   // not in yet: the old charts stay, dimmed, until it is; a later click elsewhere wins
   chartsBox.classList.add('loading');
@@ -400,7 +403,8 @@ document.querySelectorAll('#etfs .btn').forEach(b => b.onclick = () => {
                   () => { if (isin === want) document.getElementById('viTitle').textContent =
                     etfName() + ' could not be loaded - click it to try again'; });
 });
-build(); renderTable();
+// open on the ETF from the URL (the server sent its view along), else on the overview
+document.querySelector(`#etfs .btn[data-isin="${D.etf}"]`).click();
 preload();
 </script>
 {% endif %}{% endblock %}

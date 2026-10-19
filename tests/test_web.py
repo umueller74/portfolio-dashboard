@@ -176,6 +176,17 @@ def test_page_carries_only_the_portfolio_view_and_serves_each_etf_on_request(cli
     assert client.get("/view/IE9999999999").status_code == 404
 
 
+def test_page_opens_on_the_etf_in_the_url(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin="IE0000000002")],
+         closes=[{"isin": ISIN, "day": "2026-10-09", "price": "110"}])
+    d = page_data(client.get(f"/?range=3m&etf={ISIN}").text)
+    assert list(d["views"]) == ["", ISIN] and list(d["cards"]) == ["", ISIN]   # no loading step after a reload
+    assert d["etf"] == ISIN
+    d = page_data(client.get("/?etf=IE9999999999").text)
+    assert list(d["views"]) == [""] and d["etf"] == ""                          # unknown: the overview
+
+
 def test_cached_rows_follow_every_write(client):
     seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")],
          closes=[{"isin": ISIN, "day": "2026-10-08", "price": "100"}])
