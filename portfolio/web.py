@@ -11,7 +11,7 @@ from portfolio import services
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 STALE_AFTER_HOURS = 36
-RANGES = ["1d", "1w", "1m", "3m", "6m", "1y", "all"]
+RANGES = ["1d", "1w", "1m", "3m", "6m", "ytd", "1y", "all"]
 
 
 def _eur(v) -> str:

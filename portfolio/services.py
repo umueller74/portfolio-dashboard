@@ -1,4 +1,4 @@
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -192,11 +192,25 @@ def moving_averages(conn, isin: str, days: list[date], windows=(20, 50)) -> dict
     return {n: [float(sum(p for _, p in rows[i - n:i]) / n) if i >= n else None for i in ends] for n in windows}
 
 
+def range_start(days: list[date], key: str, today: date) -> int | None:
+    """Where a range starts in the sorted `days`: None when it covers them all, else the first day from its
+    cutoff on (len(days) if there is none). YTD starts one earlier, at the last close of the year before,
+    so the year's first session counts."""
+    if key == "ytd":
+        cutoff = date(today.year, 1, 1)
+    elif key in RANGE_DAYS:
+        cutoff = today - timedelta(days=RANGE_DAYS[key])
+    else:
+        return None
+    if not days or days[0] >= cutoff:
+        return None
+    i = bisect_left(days, cutoff)
+    return i - 1 if key == "ytd" else i
+
+
 def slice_range(series: list[SeriesPoint], key: str, today: date) -> list[SeriesPoint]:
-    if key not in RANGE_DAYS:
-        return series
-    start = today - timedelta(days=RANGE_DAYS[key])
-    return [p for p in series if p.day >= start]
+    i = range_start([p.day for p in series], key, today)
+    return series if i is None else series[i:]
 
 
 def last_session_change(conn, only: str | None = None) -> tuple[Decimal, Decimal] | None:
@@ -341,10 +355,8 @@ def range_stats(conn, ov: Overview, key: str, today: date, isin: str | None = No
     start = None
     if key == "1d":   # the last session: from the close before it, whatever today's weekday
         start = series[-2] if len(series) >= 2 else None
-    elif key in RANGE_DAYS and series:
-        cutoff = today - timedelta(days=RANGE_DAYS[key])
-        if series[0].day < cutoff:
-            start = next((p for p in series if p.day >= cutoff), series[-1])
+    elif (i := range_start([p.day for p in series], key, today)) is not None:
+        start = series[min(i, len(series) - 1)]
     v0, i0 = (Decimal(str(start.value)), Decimal(str(start.invested))) if start else (Decimal(0), Decimal(0))
     if isin is None:
         v1, i1 = ov.total_value, ov.total_cost

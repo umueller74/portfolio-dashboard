@@ -78,6 +78,14 @@ def test_slice_range():
     assert len(services.slice_range(s, "all", today)) == 300
 
 
+def test_ytd_starts_at_the_last_close_of_the_year_before():
+    days = [date(2025, 12, 29), date(2025, 12, 30), date(2026, 1, 2), date(2026, 3, 2)]
+    s = [SeriesPoint(d, 1.0, 1.0) for d in days]
+    assert [p.day for p in services.slice_range(s, "ytd", date(2026, 3, 2))] == days[1:]
+    assert services.slice_range(s[2:], "ytd", date(2026, 3, 2)) == s[2:]          # history starts this year
+    assert services.slice_range(s[:2], "ytd", date(2026, 1, 1)) == s[1:2]         # no session yet this year
+
+
 def test_last_session_change(client):
     seed(client, [trade("a", "BUY", "2", "100", "2026-01-05T10:00:00Z")],
          closes=[{"isin": ISIN, "day": "2026-10-08", "price": "100"},
@@ -131,6 +139,17 @@ def test_range_stats_include_realized_profit(client):
     assert st.realized == D(119)                                # 4 * 130 - 1 fee - 4 * 100
     assert st.pnl_delta == D(179)
     assert services.range_stats(conn, ov, "1w", today).realized == D(0)   # the sale is outside the last week
+
+
+def test_range_stats_ytd_count_the_first_session_of_the_year(client):
+    today = date(2026, 3, 2)
+    seed(client, [trade("a", "BUY", "10", "100", "2025-06-02T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": d, "price": p} for d, p in
+                 (("2025-06-02", "100"), ("2025-12-30", "110"), ("2026-01-02", "120"), ("2026-03-02", "130"))],
+         quotes=[{"isin": ISIN, "price": "130", "quoted_at": "2026-03-02T20:59:00Z", "outdated": False}])
+    conn = client.app.state.conn
+    st = services.range_stats(conn, services.overview(conn, today), "ytd", today)
+    assert st.value_delta == D(1300) - D(1100) and st.unrealized == D(200)   # from the 2025-12-30 close
 
 
 def test_range_stats_for_one_etf_ignore_the_others(client):
