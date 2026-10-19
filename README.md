@@ -26,3 +26,7 @@ point of the last month in the 1d, 1w and 1m ranges (one per Berlin minute; 1d i
 for the longer ones. Its "Trendlines" button (off by default) adds an upper and a lower line for each of the last
 day, week and month: from the window's earliest highest (lowest) price through the later price that keeps every
 later price below (above) the line.
+
+The ETF price chart moves: the mouse wheel zooms the time axis around the pointer, a left drag pans it, ctrl+wheel
+scales the y axis; it reaches 65 trading days (daily closes) or 20 sessions (price points) into the future, where
+the trendlines continue. A range button or a double-click resets the window; a click without dragging maximizes.

@@ -152,3 +152,5 @@ def test_price_chart_has_a_trendline_button(client):
     seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
     html = client.get("/").text
     assert 'id="plTrend"' in html and "aria-pressed=\"false\"" in html     # off by default
+    # the price chart moves: wheel zoom, drag pan, ctrl+wheel y scale, future slots for the trendlines
+    assert "addEventListener('wheel'" in html and "e.ctrlKey" in html and "futureLabels" in html

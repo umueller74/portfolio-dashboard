@@ -14,7 +14,7 @@
  .maxbtn:hover{color:var(--orange);border-color:var(--orange)}
  .maxranges{display:none;gap:.4rem;margin:0 .8rem 0 auto}.chart.max .maxranges{display:flex}
  .maxranges .btn{padding:.1rem .6rem;font-weight:400}.maxranges .btn.active{font-weight:600}
- .chart.zoomable{cursor:zoom-in}
+ .chart.zoomable{cursor:zoom-in}.chart.max canvas{cursor:grab}.chart canvas.dragging{cursor:grabbing}
  #plTrend{margin-right:.4rem}#plTrend[aria-pressed=true]{color:var(--orange);border-color:var(--orange)}
  .chart.max{position:fixed;inset:1.5rem;z-index:10;cursor:auto;box-shadow:0 0 0 100vmax rgba(0,0,0,.6)}
  .chart.max div{height:calc(100% - 2.2rem)}
@@ -95,9 +95,12 @@ let isin = '', rangeKey = {{ range|tojson }}, charts = [];
 const view = () => D.views[isin];
 const etfName = () => D.names[D.isins.indexOf(isin)];
 
-// x axis: hour for 1d, day of month for 1w/1m, month for 3m/6m/1y, year for all; only where a new period starts.
-// Labels are days ("YYYY-MM-DD") or, for every price point, Berlin minutes ("YYYY-MM-DD HH:MM").
-const MODES = {'1d': 'hour', '1w': 'day', '1m': 'day', '3m': 'month', '6m': 'month', '1y': 'month', 'all': 'year'};
+// x axis: hour, day of month, month or year depending on the visible span (about 1d, up to 1m, up to 1.5y, more);
+// a label only where a new period starts. Labels are days ("YYYY-MM-DD") or, for every price point, Berlin minutes
+// ("YYYY-MM-DD HH:MM").
+const daysBetween = (a, b) => (Date.parse(b.slice(0, 10)) - Date.parse(a.slice(0, 10))) / 864e5;
+const modeFor = (a, b) => { const n = daysBetween(a, b);
+  return n <= 2 && b.length > 10 ? 'hour' : n <= 45 ? 'day' : n <= 550 ? 'month' : 'year'; };
 const periodOf = (l, m) => m === 'hour' ? l.slice(0, 13) : m === 'day' ? l.slice(0, 10) : m === 'month' ? l.slice(0, 7) : l.slice(0, 4);
 const showOf = (l, m) => m === 'hour' ? l.slice(11, 13) + ':00' : m === 'day' ? String(parseInt(l.slice(8, 10), 10))
   : m === 'month' ? new Date(l + 'T00:00:00Z').toLocaleDateString('en', {month: 'short', timeZone: 'UTC'}) : l.slice(0, 4);
@@ -105,11 +108,12 @@ const showOf = (l, m) => m === 'hour' ? l.slice(11, 13) + ':00' : m === 'day' ? 
 const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
   const {ctx, chartArea: a, scales: {x}} = chart;
   ctx.save(); ctx.lineWidth = 1.5; ctx.globalAlpha = .55;
+  ctx.beginPath(); ctx.rect(a.left, a.top, a.right - a.left, a.bottom - a.top); ctx.clip();   // zoomed: only inside
   chart.data.datasets.forEach((ds, k) => {
     if (!ds.tradeKind || !chart.isDatasetVisible(k)) return;   // legend-hidden markers lose their lines too
     ctx.strokeStyle = ds.borderColor;
     ds.data.forEach((y, i) => {
-      if (y === null) return;
+      if (y === null || i < x.min || i > x.max) return;
       const px = Math.round(x.getPixelForValue(i)) + (k % 3 - 1) * 3;   // side by side if several kinds share a day
       ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
     });
@@ -117,15 +121,15 @@ const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
   ctx.restore();
 }};
 const GRID = 'rgba(255,255,255,.08)';
-const xTicks = {autoSkip: false, maxRotation: 0, callback(val, i) {
-  const labels = this.chart.data.labels;
-  let m = MODES[rangeKey];
-  if (m === 'hour' && labels[0].length === 10) m = 'day';   // a chart of days in the 1d range
+const xTicks = {autoSkip: false, maxRotation: 0, callback(val, i, ticks) {
+  const labels = this.chart.data.labels, first = ticks[0].value, last = ticks[ticks.length - 1].value;
+  const m = modeFor(labels[first], labels[last]);
   if (i === 0) {   // the first label is dropped when the next period starts so soon that the two would overlap
-    const next = labels.findIndex(l => periodOf(l, m) !== periodOf(labels[0], m));
-    return next > 0 && next < labels.length / 25 ? '' : showOf(labels[0], m);
+    let next = first + 1;
+    while (next <= last && periodOf(labels[next], m) === periodOf(labels[first], m)) next++;
+    return next <= last && next - first < ticks.length / 25 ? '' : showOf(labels[val], m);
   }
-  return periodOf(labels[i], m) !== periodOf(labels[i - 1], m) ? showOf(labels[i], m) : '';
+  return periodOf(labels[val], m) !== periodOf(labels[val - 1], m) ? showOf(labels[val], m) : '';
 }};
 
 // markers: same trades on both charts, on each chart's own days, y taken from that chart's own series
@@ -138,7 +142,7 @@ const tipLines = items => { const ch = items[0].chart; return ch.markers.tooltip
 const options = nLines => ({interaction: {mode: 'index', intersect: false},
   scales: {x: {ticks: xTicks, grid: {color: c => c.tick && c.tick.label ? GRID : 'transparent'}}},
   plugins: {legend: {labels: {usePointStyle: true, filter: (item, data) => !data.datasets[item.datasetIndex].trend || (trendOn && data.ticksShown)}},
-    tooltip: {filter: item => item.datasetIndex < nLines, callbacks: {afterBody: tipLines}}}});
+    tooltip: {filter: item => item.datasetIndex < nLines || item.dataset.trend, callbacks: {afterBody: tipLines}}}});
 
 // trendlines over every price point, per window: the upper one starts at the window's earliest highest price (the
 // end of it, when it holds for several points) and
@@ -146,9 +150,9 @@ const options = nLines => ({interaction: {mode: 'index', intersect: false},
 // the earliest lowest price, with no later price below it. None when the extreme is the window's last price.
 const TICK_RANGES = ['1d', '1w', '1m'];
 const TRENDS = [['1D', '1d', '#facc15'], ['1W', '1w', '#2dd4bf'], ['1M', '1m', '#f1f5f9']];
-function trendline(p, s, upper) {
-  const sign = upper ? 1 : -1;
-  if (s >= p.length) return p.map(() => null);
+function trendline(p, s, upper, n = p.length) {   // n > p.length: continued over the future slots
+  const sign = upper ? 1 : -1, none = Array(n).fill(null);
+  if (s >= p.length) return none;
   let i0 = s, best = null;
   for (let k = s; k < p.length; k++) if (sign * p[k] > sign * p[i0]) i0 = k;
   // a run of equal extremes is one peak: start at its end, so the second touch is a separate, later price
@@ -157,7 +161,27 @@ function trendline(p, s, upper) {
     const slope = (p[k] - p[i0]) / (k - i0);
     if (best === null || sign * slope > sign * best) best = slope;
   }
-  return p.map((_, k) => best === null || k < i0 ? null : p[i0] + best * (k - i0));
+  return none.map((_, k) => best === null || k < i0 ? null : p[i0] + best * (k - i0));
+}
+
+// the price chart reaches into the future, so trendlines can be followed: the next trading days (weekdays) as
+// empty slots, one per day for closes, the last session's times for every price point
+const FUTURE_SESSIONS = {daily: 65, ticks: 20};
+function futureLabels(labels, sessions) {
+  if (!labels.length) return [];
+  const last = labels[labels.length - 1], day = last.slice(0, 10), out = [];
+  const times = last.length > 10 ? labels.filter(l => l.startsWith(day)).map(l => l.slice(10)) : [''];
+  for (const d = new Date(day + 'T00:00:00Z'); out.length < sessions * times.length;) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    if (d.getUTCDay() % 6 === 0) continue;
+    const ds = d.toISOString().slice(0, 10);
+    for (const t of times) out.push(ds + t);
+  }
+  return out;
+}
+function withFuture(v, sessions) {
+  const fut = futureLabels(v.labels, sessions);
+  return {...v, real: v.labels.length, labels: v.labels.concat(fut), full: v.full.map(a => a.concat(fut.map(() => null)))};
 }
 let trendOn = false;
 const trendBtn = document.getElementById('plTrend');
@@ -207,9 +231,15 @@ function build() {
       pc.data.datasets.push({label: `Trend ${name} ${upper ? 'high' : 'low'}`, trend: true, hidden: !trendOn, data: [],
         borderColor: color, borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, order: 1});
     pc.variants.daily.full.push(...TRENDS.flatMap(() => [v.second.map(() => null), v.second.map(() => null)]));
-    if (n) pc.variants.ticks = {labels: v.tlabels, markers: v.tmarkers, pointRadius: 2, full: [
-      v.tprices, v.tma20, v.tma50, ...markerDatasets(v.tmarkers, v.tprices).map(d => d.data),
-      ...TRENDS.flatMap(([, key]) => [true, false].map(up => trendline(v.tprices, rangeStart(v.tlabels, key), up)))]};
+    pc.variants.daily = withFuture(pc.variants.daily, FUTURE_SESSIONS.daily);
+    if (n) {
+      const t = withFuture({labels: v.tlabels, markers: v.tmarkers, pointRadius: 2, full: [
+        v.tprices, v.tma20, v.tma50, ...markerDatasets(v.tmarkers, v.tprices).map(d => d.data)]}, FUTURE_SESSIONS.ticks);
+      t.full.push(...TRENDS.flatMap(([, key]) => [true, false].map(up =>
+        trendline(v.tprices, rangeStart(v.tlabels, key), up, t.labels.length))));
+      pc.variants.ticks = t;
+    }
+    pc.zoomable = true;   // wheel, drag and ctrl+wheel move this chart; ranges set its window instead of cutting
   }
   trendBtn.hidden = all;
   maxBtn.hidden = all;
@@ -236,17 +266,28 @@ trendBtn.onclick = e => {
   if (trendOn && charts[1].variants.ticks && !TICK_RANGES.includes(rangeKey)) { rangeKey = '1m'; applyRange(); }
 };
 maxBtn.onclick = e => { e.stopPropagation(); maximize(!plBox.classList.contains('max')); };
-plBox.addEventListener('click', () => { if (!maxBtn.hidden) maximize(true); });
+plBox.addEventListener('click', () => { if (!maxBtn.hidden && !dragged) maximize(true); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') maximize(false); });
 
 function applyRange() {
   for (const ch of charts) {
     const v = ch.variants.ticks && TICK_RANGES.includes(rangeKey) ? ch.variants.ticks : ch.variants.daily;
-    const start = rangeStart(v.labels, rangeKey);
-    Object.assign(ch, {offset: start, markers: v.markers});
     ch.data.ticksShown = v === ch.variants.ticks;   // trendlines exist only over every price point
-    ch.data.labels = v.labels.slice(start);
-    ch.data.datasets.forEach((ds, i) => ds.data = v.full[i].slice(start));
+    if (ch.zoomable) {   // all data stays, the range only sets the window: from its start to the last real point
+      const real = v.real, start = Math.min(rangeStart(v.labels.slice(0, real), rangeKey), real - 1);
+      if (ch.shown !== v) {
+        ch.shown = v;
+        ch.data.labels = v.labels;
+        ch.data.datasets.forEach((ds, i) => ds.data = v.full[i]);
+      }
+      Object.assign(ch, {offset: 0, markers: v.markers});
+      setWindow(ch, Math.max(start, 0), real - 1);
+    } else {
+      const start = rangeStart(v.labels, rangeKey);
+      Object.assign(ch, {offset: start, markers: v.markers});
+      ch.data.labels = v.labels.slice(start);
+      ch.data.datasets.forEach((ds, i) => ds.data = v.full[i].slice(start));
+    }
     if (ch.variants.ticks) ch.data.datasets[0].pointRadius = v.pointRadius || 0;   // every price point as a dot
     ch.update();
   }
@@ -256,6 +297,59 @@ function applyRange() {
   document.getElementById('c-pnl').className = c.pnl_pos ? 'pos' : 'neg';
   history.replaceState(null, '', '?range=' + rangeKey);
 }
+// the ETF price chart moves: wheel zooms the time axis around the pointer, a left drag pans it (into the future
+// too), ctrl+wheel scales the y axis around the pointer; a double-click or a range button resets the window
+function setWindow(ch, min, max, yMin, yMax) {
+  Object.assign(ch.options.scales.x, {min, max});
+  Object.assign(ch.options.scales.y, {min: yMin, max: yMax});   // undefined: fit to the visible prices
+}
+const MIN_POINTS = 8, pnlCanvas = document.getElementById('pnlChart');
+const zoomChart = () => isin !== '' && charts[1] && charts[1].zoomable ? charts[1] : null;
+function clampWindow(ch, min, max) {
+  const last = ch.data.labels.length - 1, width = Math.min(Math.max(max - min, MIN_POINTS), last);
+  min = Math.max(0, Math.min(min, last - width));
+  return [Math.round(min), Math.round(min + width)];
+}
+pnlCanvas.addEventListener('wheel', e => {
+  const ch = zoomChart();
+  if (!ch) return;
+  e.preventDefault();   // neither page scroll nor (with ctrl) browser zoom
+  const f = e.deltaY < 0 ? .8 : 1.25, {x, y} = ch.scales;
+  if (e.ctrlKey) {
+    const at = y.getValueForPixel(e.offsetY);
+    setWindow(ch, x.min, x.max, at - (at - y.min) * f, at + (y.max - at) * f);
+  } else {
+    const at = Math.min(Math.max(x.getValueForPixel(e.offsetX), x.min), x.max);
+    const [min, max] = clampWindow(ch, at - (at - x.min) * f, at + (x.max - at) * f);
+    setWindow(ch, min, max, ch.options.scales.y.min, ch.options.scales.y.max);
+  }
+  ch.update('none');
+}, {passive: false});
+let drag = null, dragged = false;
+pnlCanvas.addEventListener('mousedown', e => {
+  const ch = zoomChart();
+  if (!ch || e.button !== 0) return;
+  drag = {ch, x0: e.clientX, min: ch.scales.x.min, max: ch.scales.x.max, moved: false};
+});
+window.addEventListener('mousemove', e => {
+  if (!drag) return;
+  const {ch} = drag, dx = e.clientX - drag.x0;
+  if (Math.abs(dx) > 3) { drag.moved = true; pnlCanvas.classList.add('dragging'); }
+  if (!drag.moved) return;
+  const perPoint = (ch.chartArea.right - ch.chartArea.left) / Math.max(drag.max - drag.min, 1);
+  const shift = -dx / perPoint, [min, max] = clampWindow(ch, drag.min + shift, drag.max + shift);
+  setWindow(ch, min, max, ch.options.scales.y.min, ch.options.scales.y.max);
+  ch.update('none');
+});
+window.addEventListener('mouseup', () => {
+  if (!drag) return;
+  dragged = drag.moved;   // a drag is not a click: it must not maximize
+  setTimeout(() => { dragged = false; });
+  drag = null;
+  pnlCanvas.classList.remove('dragging');
+});
+pnlCanvas.addEventListener('dblclick', () => { if (zoomChart()) applyRange(); });
+
 // range buttons: the bar above the charts, plus a copy in the maximized chart's header
 document.querySelectorAll('.btn[data-range]').forEach(b => b.onclick = () => { rangeKey = b.dataset.range; applyRange(); });
 
