@@ -140,7 +140,8 @@ const options = nLines => ({interaction: {mode: 'index', intersect: false},
   plugins: {legend: {labels: {usePointStyle: true, filter: (item, data) => !data.datasets[item.datasetIndex].trend || (trendOn && data.ticksShown)}},
     tooltip: {filter: item => item.datasetIndex < nLines, callbacks: {afterBody: tipLines}}}});
 
-// trendlines over every price point, per window: the upper one starts at the window's earliest highest price and
+// trendlines over every price point, per window: the upper one starts at the window's earliest highest price (the
+// end of it, when it holds for several points) and
 // runs through the later price that makes it steepest, so no later price is above it; the lower one likewise from
 // the earliest lowest price, with no later price below it. None when the extreme is the window's last price.
 const TICK_RANGES = ['1d', '1w', '1m'];
@@ -150,6 +151,8 @@ function trendline(p, s, upper) {
   if (s >= p.length) return p.map(() => null);
   let i0 = s, best = null;
   for (let k = s; k < p.length; k++) if (sign * p[k] > sign * p[i0]) i0 = k;
+  // a run of equal extremes is one peak: start at its end, so the second touch is a separate, later price
+  while (i0 + 1 < p.length && p[i0 + 1] === p[i0]) i0++;
   for (let k = i0 + 1; k < p.length; k++) {
     const slope = (p[k] - p[i0]) / (k - i0);
     if (best === null || sign * slope > sign * best) best = slope;
