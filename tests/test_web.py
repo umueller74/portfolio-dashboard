@@ -19,8 +19,8 @@ def test_portfolio_page_shows_totals_and_ranges(client):
          quotes=[{"isin": ISIN, "price": "110", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
     html = client.get("/?range=3m").text
     assert "550.00" in html and "+10.00" in html
-    for key in ("1d", "1w", "1m", "3m", "6m", "1y", "all"):
-        assert f'data-range="{key}"' in html
+    for key in ("1d", "1w", "1m", "3m", "6m", "ytd", "1y", "all"):
+        assert f'data-range="{key}">{key.upper()}<' in html
     assert 'id="pnlChart"' in html and 'id="valueChart"' in html
 
 

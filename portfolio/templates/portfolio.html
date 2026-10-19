@@ -45,11 +45,11 @@
  <div class="card"><span>Last session</span><b id="c-session">{{ cards[''][range].session }}</b></div>
 </div>
 
-<div class="bar" id="ranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</div>
+<div class="bar" id="ranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r|upper }}</button>{% endfor %}</div>
 <div class="charts">
  <div class="chart"><h3 id="viTitle">Value and invested (EUR)</h3><div><canvas id="valueChart"></canvas></div></div>
  <div class="chart"><h3><span id="plTitle">Profit / Loss (EUR)</span>
-  <span class="maxranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</span><button class="maxbtn" id="plTrend" title="Trendlines of the last day, week and month (shown in the 1d, 1w and 1m ranges; switches to 1m from longer ones)" aria-pressed="false" hidden>Trendlines</button><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
+  <span class="maxranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r|upper }}</button>{% endfor %}</span><button class="maxbtn" id="plTrend" title="Trendlines of the last day, week and month (shown in the 1D, 1W and 1M ranges; switches to 1M from longer ones)" aria-pressed="false" hidden>Trendlines</button><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
 </div>
 
 <div class="split">
@@ -209,6 +209,10 @@ function rangeStart(labels, key) {
       return i;
     }
     return Math.max(0, labels.length - 2);
+  }
+  if (key === 'ytd') {   // from the last close of the year before, so the year's first session counts
+    const i = labels.findIndex(l => l >= D.today.slice(0, 4) + '-01-01');
+    return i < 0 ? labels.length - 1 : Math.max(i - 1, 0);
   }
   if (!D.rangeDays[key]) return 0;
   const d = new Date(D.today + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - D.rangeDays[key]);
