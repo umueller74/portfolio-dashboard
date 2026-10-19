@@ -14,7 +14,9 @@ log = logging.getLogger("fetcher")
 MAX_PAGES = 50
 
 
-async def collect(call, state_dir) -> dict:
+async def collect(call, state_dir, timeframes=normalize.KNOWN_TIMEFRAMES) -> dict:
+    """Trades (with fees and prices from the cached details), daily closes, quotes, and as `ticks` every
+    chart point of every timeframe. year_to_date is always fetched and must succeed: it feeds the closes."""
     state = Path(state_dir)
     state.mkdir(parents=True, exist_ok=True)
     cache_path = state / "details.json"
@@ -41,12 +43,23 @@ async def collect(call, state_dir) -> dict:
             t["price"] = cache[t["id"]]["price"]
     cache_path.write_text(json.dumps(cache))
 
-    closes, quotes = [], []
+    closes, quotes, ticks = [], [], {}
     for isin in sorted({t["isin"] for t in trades}):
         chart = await call("get_security_chart", {"isin": isin, "timeframe": "year_to_date"})
         closes += [{"isin": isin, **c} for c in normalize.parse_chart(chart)]
+        charts = [chart]
+        for tf in timeframes:
+            if tf == "year_to_date":
+                continue
+            try:
+                charts.append(await call("get_security_chart", {"isin": isin, "timeframe": tf}))
+            except Exception as e:   # finer prices are a bonus; the run still delivers trades and closes
+                log.warning("chart %s for %s failed: %s", tf, isin, e)
+        for c in charts:
+            ticks.update({(t["isin"], t["at"]): t for t in normalize.parse_ticks(c, isin)})
         quotes.append(normalize.parse_quote(await call("get_security_quote", {"isin": isin})))
-    return {"fetched_at": datetime.now(timezone.utc).isoformat(), "trades": trades, "closes": closes, "quotes": quotes}
+    return {"fetched_at": datetime.now(timezone.utc).isoformat(), "trades": trades, "closes": closes, "quotes": quotes,
+            "ticks": sorted(ticks.values(), key=lambda t: (t["isin"], t["at"]))}
 
 
 def push(body: dict, ingest_url: str, ingest_token: str, opener=urllib.request.urlopen) -> None:
@@ -79,9 +92,13 @@ async def _main() -> None:
                         raise RuntimeError(f"{tool} failed: {text}")
                     return json.loads(text)
 
-                body = await collect(call, os.environ["STATE_DIR"])
+                tools = (await session.list_tools()).tools
+                timeframes = normalize.chart_timeframes([{"name": t.name, "inputSchema": t.inputSchema} for t in tools])
+                log.info("chart timeframes: %s", ", ".join(timeframes))
+                body = await collect(call, os.environ["STATE_DIR"], timeframes)
     push(body, os.environ["INGEST_URL"], os.environ["INGEST_TOKEN"])
-    log.info("pushed %d trades, %d closes, %d quotes", len(body["trades"]), len(body["closes"]), len(body["quotes"]))
+    log.info("pushed %d trades, %d closes, %d quotes, %d ticks",
+             len(body["trades"]), len(body["closes"]), len(body["quotes"]), len(body["ticks"]))
 
 
 def main() -> int:

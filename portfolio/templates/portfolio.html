@@ -15,6 +15,7 @@
  .maxranges{display:none;gap:.4rem;margin:0 .8rem 0 auto}.chart.max .maxranges{display:flex}
  .maxranges .btn{padding:.1rem .6rem;font-weight:400}.maxranges .btn.active{font-weight:600}
  .chart.zoomable{cursor:zoom-in}
+ #plTrend{margin-right:.4rem}#plTrend[aria-pressed=true]{color:var(--orange);border-color:var(--orange)}
  .chart.max{position:fixed;inset:1.5rem;z-index:10;cursor:auto;box-shadow:0 0 0 100vmax rgba(0,0,0,.6)}
  .chart.max div{height:calc(100% - 2.2rem)}
  th.sort{cursor:pointer;user-select:none}th.sort:hover{color:var(--orange)}
@@ -47,7 +48,7 @@
 <div class="charts">
  <div class="chart"><h3 id="viTitle">Value and invested (EUR)</h3><div><canvas id="valueChart"></canvas></div></div>
  <div class="chart"><h3><span id="plTitle">Profit / Loss (EUR)</span>
-  <span class="maxranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</span><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
+  <span class="maxranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r }}</button>{% endfor %}</span><button class="maxbtn" id="plTrend" title="Trendlines of the last day, week and month (shown in the 1d, 1w and 1m ranges)" aria-pressed="false" hidden>Trendlines</button><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
 </div>
 
 <div class="split">
@@ -94,10 +95,11 @@ let isin = '', rangeKey = {{ range|tojson }}, charts = [];
 const view = () => D.views[isin];
 const etfName = () => D.names[D.isins.indexOf(isin)];
 
-// x axis: day of month for 1w/1m, month for 3m/6m/1y, year for all; only where a new day/month/year starts
-const MODES = {'1w': 'day', '1m': 'day', '3m': 'month', '6m': 'month', '1y': 'month', 'all': 'year'};
-const periodOf = (l, m) => m === 'day' ? l : m === 'month' ? l.slice(0, 7) : l.slice(0, 4);
-const showOf = (l, m) => m === 'day' ? String(parseInt(l.slice(8), 10))
+// x axis: hour for 1d, day of month for 1w/1m, month for 3m/6m/1y, year for all; only where a new period starts.
+// Labels are days ("YYYY-MM-DD") or, for every price point, Berlin minutes ("YYYY-MM-DD HH:MM").
+const MODES = {'1d': 'hour', '1w': 'day', '1m': 'day', '3m': 'month', '6m': 'month', '1y': 'month', 'all': 'year'};
+const periodOf = (l, m) => m === 'hour' ? l.slice(0, 13) : m === 'day' ? l.slice(0, 10) : m === 'month' ? l.slice(0, 7) : l.slice(0, 4);
+const showOf = (l, m) => m === 'hour' ? l.slice(11, 13) + ':00' : m === 'day' ? String(parseInt(l.slice(8, 10), 10))
   : m === 'month' ? new Date(l + 'T00:00:00Z').toLocaleDateString('en', {month: 'short', timeZone: 'UTC'}) : l.slice(0, 4);
 // a vertical line per trade day, coloured like its marker; drawn behind the data
 const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
@@ -116,7 +118,9 @@ const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
 }};
 const GRID = 'rgba(255,255,255,.08)';
 const xTicks = {autoSkip: false, maxRotation: 0, callback(val, i) {
-  const labels = this.chart.data.labels, m = MODES[rangeKey];
+  const labels = this.chart.data.labels;
+  let m = MODES[rangeKey];
+  if (m === 'hour' && labels[0].length === 10) m = 'day';   // a chart of days in the 1d range
   if (i === 0) {   // the first label is dropped when the next period starts so soon that the two would overlap
     const next = labels.findIndex(l => periodOf(l, m) !== periodOf(labels[0], m));
     return next > 0 && next < labels.length / 25 ? '' : showOf(labels[0], m);
@@ -133,8 +137,42 @@ const markerDatasets = (markers, ys) => markerSets.map(([label, key, color, styl
 const tipLines = items => { const ch = items[0].chart; return ch.markers.tooltips[ch.offset + items[0].dataIndex]; };
 const options = nLines => ({interaction: {mode: 'index', intersect: false},
   scales: {x: {ticks: xTicks, grid: {color: c => c.tick && c.tick.label ? GRID : 'transparent'}}},
-  plugins: {legend: {labels: {usePointStyle: true}},
+  plugins: {legend: {labels: {usePointStyle: true, filter: (item, data) => !data.datasets[item.datasetIndex].trend || (trendOn && data.ticksShown)}},
     tooltip: {filter: item => item.datasetIndex < nLines, callbacks: {afterBody: tipLines}}}});
+
+// trendlines over every price point, per window: the upper one starts at the window's earliest highest price and
+// runs through the later price that makes it steepest, so no later price is above it; the lower one likewise from
+// the earliest lowest price, with no later price below it. None when the extreme is the window's last price.
+const TICK_RANGES = ['1d', '1w', '1m'];
+const TRENDS = [['1D', '1d', '#facc15'], ['1W', '1w', '#2dd4bf'], ['1M', '1m', '#f1f5f9']];
+function trendline(p, s, upper) {
+  const sign = upper ? 1 : -1;
+  if (s >= p.length) return p.map(() => null);
+  let i0 = s, best = null;
+  for (let k = s; k < p.length; k++) if (sign * p[k] > sign * p[i0]) i0 = k;
+  for (let k = i0 + 1; k < p.length; k++) {
+    const slope = (p[k] - p[i0]) / (k - i0);
+    if (best === null || sign * slope > sign * best) best = slope;
+  }
+  return p.map((_, k) => best === null || k < i0 ? null : p[i0] + best * (k - i0));
+}
+let trendOn = false;
+const trendBtn = document.getElementById('plTrend');
+
+// where a range starts in a chart's labels: 1d is the last session (its price points, or the last two closes)
+function rangeStart(labels, key) {
+  if (key === '1d') {
+    if (labels.length && labels[0].length > 10) {
+      const last = labels[labels.length - 1].slice(0, 10), i = labels.findIndex(l => l.startsWith(last));
+      return i;
+    }
+    return Math.max(0, labels.length - 2);
+  }
+  if (!D.rangeDays[key]) return 0;
+  const d = new Date(D.today + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - D.rangeDays[key]);
+  const cutoff = d.toISOString().slice(0, 10), i = labels.findIndex(l => l >= cutoff);
+  return i < 0 ? labels.length : i;
+}
 
 function build() {
   charts.forEach(c => c.destroy());
@@ -157,9 +195,20 @@ function build() {
     ['pnlChart', [second, ...averages, ...markerDatasets(v.pmarkers, v.second)], 1 + averages.length, v.plabels, v.pmarkers]];
   charts = specs.map(([el, datasets, lines, labels, markers]) => {
     const chart = new Chart(document.getElementById(el), {type: 'line', data: {labels, datasets}, options: options(lines), plugins: [tradeLines]});
-    Object.assign(chart, {full: datasets.map(d => d.data), labelsFull: labels, markers, offset: 0});
+    chart.variants = {daily: {labels, full: datasets.map(d => d.data), markers}};
     return chart;
   });
+  if (!all) {   // the ETF price chart: every price point for the short ranges, with the six trendlines on top
+    const pc = charts[1], n = v.tprices.length;
+    for (const [name, key, color] of TRENDS) for (const upper of [true, false])
+      pc.data.datasets.push({label: `Trend ${name} ${upper ? 'high' : 'low'}`, trend: true, hidden: !trendOn, data: [],
+        borderColor: color, borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, order: 1});
+    pc.variants.daily.full.push(...TRENDS.flatMap(() => [v.second.map(() => null), v.second.map(() => null)]));
+    if (n) pc.variants.ticks = {labels: v.tlabels, markers: v.tmarkers, pointRadius: 2, full: [
+      v.tprices, v.tma20, v.tma50, ...markerDatasets(v.tmarkers, v.tprices).map(d => d.data),
+      ...TRENDS.flatMap(([, key]) => [true, false].map(up => trendline(v.tprices, rangeStart(v.tlabels, key), up)))]};
+  }
+  trendBtn.hidden = all;
   maxBtn.hidden = all;
   plBox.classList.toggle('zoomable', !all);
   if (all) maximize(false);
@@ -173,22 +222,27 @@ function maximize(on) {
   maxBtn.textContent = on ? '✕' : '⤢';
   maxBtn.title = on ? 'Restore (Esc)' : 'Maximize';
 }
+trendBtn.onclick = e => {
+  e.stopPropagation();
+  trendOn = !trendOn;
+  trendBtn.setAttribute('aria-pressed', trendOn);
+  // all six at once, also those hidden one by one in the legend
+  charts[1].data.datasets.forEach((ds, i) => { if (ds.trend) charts[1].setDatasetVisibility(i, trendOn); });
+  charts[1].update();
+};
 maxBtn.onclick = e => { e.stopPropagation(); maximize(!plBox.classList.contains('max')); };
 plBox.addEventListener('click', () => { if (!maxBtn.hidden) maximize(true); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') maximize(false); });
 
 function applyRange() {
-  let cutoff = '';
-  if (D.rangeDays[rangeKey]) {
-    const d = new Date(D.today + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - D.rangeDays[rangeKey]);
-    cutoff = d.toISOString().slice(0, 10);
-  }
   for (const ch of charts) {
-    let start = ch.labelsFull.findIndex(l => l >= cutoff);
-    if (start < 0) start = ch.labelsFull.length;
-    ch.offset = start;
-    ch.data.labels = ch.labelsFull.slice(start);
-    ch.data.datasets.forEach((ds, i) => ds.data = ch.full[i].slice(start));
+    const v = ch.variants.ticks && TICK_RANGES.includes(rangeKey) ? ch.variants.ticks : ch.variants.daily;
+    const start = rangeStart(v.labels, rangeKey);
+    Object.assign(ch, {offset: start, markers: v.markers});
+    ch.data.ticksShown = v === ch.variants.ticks;   // trendlines exist only over every price point
+    ch.data.labels = v.labels.slice(start);
+    ch.data.datasets.forEach((ds, i) => ds.data = v.full[i].slice(start));
+    if (ch.variants.ticks) ch.data.datasets[0].pointRadius = v.pointRadius || 0;   // every price point as a dot
     ch.update();
   }
   document.querySelectorAll('.btn[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === rangeKey));

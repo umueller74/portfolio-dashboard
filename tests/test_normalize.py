@@ -73,3 +73,20 @@ def test_price_from_details_excludes_the_fee():
     assert n.price_from_details(details("-42.99", "42.00"), D("8")) == D("5.250000")
     assert n.price_from_details(details("-25.0000", "25.0000"), D("0.296736")) == D("84.249973")
     assert n.price_from_details(details("-1", None), D("1")) is None
+
+
+def test_parse_ticks_keeps_every_point_in_utc():
+    payload = {"points": [
+        {"midPrice": 101.5, "timestampUtc": "2026-10-08T20:59:57.000Z"},
+        {"midPrice": 100.0, "timestampUtc": "2026-10-08T07:29:59Z"}]}
+    assert n.parse_ticks(payload, "IE1") == [
+        {"isin": "IE1", "at": "2026-10-08T07:29:59+00:00", "price": "100.0"},
+        {"isin": "IE1", "at": "2026-10-08T20:59:57+00:00", "price": "101.5"}]
+
+
+def test_chart_timeframes_come_from_the_tool_schema():
+    tools = [{"name": "get_security_quote", "inputSchema": {}},
+             {"name": "get_security_chart", "inputSchema": {"properties": {
+                 "isin": {"type": "string"}, "timeframe": {"enum": ["one_day", "one_month", "max"]}}}}]
+    assert n.chart_timeframes(tools) == ["one_day", "one_month", "max"]
+    assert n.chart_timeframes([]) == list(n.KNOWN_TIMEFRAMES)            # schema not readable: what is known to work

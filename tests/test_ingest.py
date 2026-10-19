@@ -35,3 +35,13 @@ def test_backup_returns_sqlite_file(client):
     r = client.get("/api/backup", headers=AUTH)
     assert r.status_code == 200 and r.content.startswith(b"SQLite format 3")
     assert client.get("/api/backup").status_code == 401
+
+
+def test_ingest_stores_ticks_and_every_quote_as_a_tick(client):
+    body = payload(ticks=[{"isin": "IE0000000001", "at": "2026-10-09T08:00:00+00:00", "price": "700"},
+                          {"isin": "IE0000000001", "at": "2026-10-09T20:59:56.615Z", "price": "710.50"}])
+    for _ in range(2):
+        assert client.post("/api/ingest", json=body, headers=AUTH).status_code == 200
+    rows = client.app.state.conn.execute("select at, price from ticks order by at").fetchall()
+    # the quote has the same instant as the second tick: stored once
+    assert [tuple(r) for r in rows] == [("2026-10-09T08:00:00+00:00", "700"), ("2026-10-09T20:59:56.615000+00:00", "710.50")]

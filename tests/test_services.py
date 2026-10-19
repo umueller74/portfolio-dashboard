@@ -173,3 +173,14 @@ def test_moving_averages_use_closes_from_before_the_first_trade(client):
     ma = services.moving_averages(conn, ISIN, labels, (3, 6))
     assert ma[3] == [4.0, 5.0]                         # ... but the averages reach back: (3+4+5)/3, (4+5+6)/3
     assert ma[6] == [None, 3.5]                        # too few closes yet on the first chart day
+
+
+def test_one_day_range_is_the_change_over_the_last_session(client):
+    today = date(2026, 10, 11)    # a Sunday: the last session is Friday 2026-10-09
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": d, "price": p} for d, p in
+                 (("2026-01-05", "100"), ("2026-10-08", "110"), ("2026-10-09", "120"))],
+         quotes=[{"isin": ISIN, "price": "120", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
+    conn = client.app.state.conn
+    st = services.range_stats(conn, services.overview(conn, today), "1d", today)
+    assert st.value_delta == D(600) - D(550) and st.pnl_delta == D(50)

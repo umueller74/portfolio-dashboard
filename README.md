@@ -19,3 +19,10 @@ is not in `backfills` yet gets its daily EUR closes since launch from justETF (`
 `closes` for the days before its first broker close. Each ETF is fetched once (new ones on the ingest after their
 first trade); a failed fetch is retried on the next ingest. The ETF price chart shows that whole history, the
 value chart still starts at the first trade.
+
+Every price: the fetcher reads the `timeframe` values of `get_security_chart` from the tool schema and sends every
+point of every timeframe as `ticks`; the app also keeps each quote as a tick. The ETF price chart plots every price
+point of the last month in the 1d, 1w and 1m ranges (one per Berlin minute; 1d is the last session), daily closes
+for the longer ones. Its "Trendlines" button (off by default) adds an upper and a lower line for each of the last
+day, week and month: from the window's earliest highest (lowest) price through the later price that keeps every
+later price below (above) the line.

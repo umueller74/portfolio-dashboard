@@ -40,11 +40,22 @@ class QuoteIn(BaseModel):
     outdated: bool
 
 
+class TickIn(BaseModel):
+    isin: str
+    at: datetime
+    price: Decimal
+
+
 class IngestIn(BaseModel):
     fetched_at: datetime
     trades: list[TradeIn] = []
     closes: list[CloseIn] = []
     quotes: list[QuoteIn] = []
+    ticks: list[TickIn] = []          # every chart point the fetcher saw
+
+
+def _utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def require_token(request: Request, authorization: str = Header(default="")):
@@ -80,6 +91,10 @@ async def ingest(body: IngestIn, request: Request, tasks: BackgroundTasks):
                 " outdated=excluded.outdated",
                 (q.isin, str(q.price), q.quoted_at.isoformat(), int(q.outdated)),
             )
+        # every price seen is kept: the chart points plus each quote (one per fetch)
+        conn.executemany("insert or ignore into ticks(isin,at,price) values(?,?,?)",
+                         [(t.isin, _utc(t.at), str(t.price)) for t in body.ticks]
+                         + [(q.isin, _utc(q.quoted_at), str(q.price)) for q in body.quotes])
         conn.execute(
             "insert into meta(key,value) values('last_ingest',?)"
             " on conflict(key) do update set value=excluded.value",
