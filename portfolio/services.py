@@ -8,7 +8,7 @@ from portfolio.fifo import Lot, OversellError, Trade, replay
 from portfolio.xirr import xirr
 
 BERLIN = ZoneInfo("Europe/Berlin")
-RANGE_DAYS = {"1w": 7, "1m": 30, "3m": 91, "6m": 182, "1y": 365}
+RANGE_DAYS = {"1d": 1, "1w": 7, "1m": 30, "3m": 91, "6m": 182, "1y": 365}
 MIN_XIRR_AGE_DAYS = 90
 
 
@@ -29,6 +29,12 @@ def _closes(conn) -> dict[str, list[tuple[date, Decimal]]]:
     for r in conn.execute("select isin, day, price from closes order by isin, day"):
         out.setdefault(r["isin"], []).append((date.fromisoformat(r["day"]), Decimal(r["price"])))
     return out
+
+
+def ticks(conn, isin: str) -> list[tuple[datetime, Decimal]]:
+    """Every stored price of the ETF (chart points and quotes), oldest first."""
+    return [(datetime.fromisoformat(r["at"]), Decimal(r["price"]))
+            for r in conn.execute("select at, price from ticks where isin=? order by at", (isin,))]
 
 
 def _price_on(rows: list[tuple[date, Decimal]] | None, day: date) -> Decimal | None:
@@ -271,8 +277,9 @@ def _category(t: Trade) -> str:
     return "plan_buy" if t.kind == "SAVINGS_PLAN" else "cash_buy"   # unknown kinds count as one-off buys
 
 
-def trade_markers(conn, days: list[date], isin: str | None = None) -> dict[date, list[Marker]]:
-    """Trades grouped by the chart day they belong to: the last chart day on or before the trade date."""
+def trade_markers(conn, days: list, isin: str | None = None, at=None) -> dict:
+    """Trades grouped by the chart day they belong to: the last chart day on or before the trade date.
+    With `at` (trade -> point, e.g. its instant) the chart points are instants instead of days."""
     if not days:
         return {}
     days = sorted(days)
@@ -280,7 +287,7 @@ def trade_markers(conn, days: list[date], isin: str | None = None) -> dict[date,
     for t in load_trades(conn):
         if isin is not None and t.isin != isin:
             continue
-        d = _day(t.executed_at)
+        d = at(t) if at else _day(t.executed_at)
         i = bisect_right(days, d) - 1
         if i < 0 or (i == len(days) - 1 and (d - days[i]).days > MARKER_GRACE_DAYS):
             continue
@@ -309,7 +316,9 @@ def range_stats(conn, ov: Overview, key: str, today: date, isin: str | None = No
     if series is None:
         series = value_series(conn, isin)
     start = None
-    if key in RANGE_DAYS and series:
+    if key == "1d":   # the last session: from the close before it, whatever today's weekday
+        start = series[-2] if len(series) >= 2 else None
+    elif key in RANGE_DAYS and series:
         cutoff = today - timedelta(days=RANGE_DAYS[key])
         if series[0].day < cutoff:
             start = next((p for p in series if p.day >= cutoff), series[-1])

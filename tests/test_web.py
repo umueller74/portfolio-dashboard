@@ -18,7 +18,7 @@ def test_portfolio_page_shows_totals_and_ranges(client):
          quotes=[{"isin": ISIN, "price": "110", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}])
     html = client.get("/?range=3m").text
     assert "550.00" in html and "+10.00" in html
-    for key in ("1w", "1m", "3m", "6m", "1y", "all"):
+    for key in ("1d", "1w", "1m", "3m", "6m", "1y", "all"):
         assert f'data-range="{key}"' in html
     assert 'id="pnlChart"' in html and 'id="valueChart"' in html
 
@@ -128,6 +128,27 @@ def test_maximized_price_chart_has_its_own_range_buttons(client):
     seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
     html = client.get("/?range=3m").text
     header = html[html.index('class="maxranges"'):html.index('id="plMax"')]
-    for key in ("1w", "1m", "3m", "6m", "1y", "all"):
+    for key in ("1d", "1w", "1m", "3m", "6m", "1y", "all"):
         assert f'data-range="{key}"' in header
     assert html.count('class="btn active" data-range="3m"') == 2      # bar and header agree
+
+
+def test_etf_view_has_every_price_point_of_the_last_month(client):
+    ticks = [{"isin": ISIN, "at": at, "price": p} for at, p in [
+        ("2026-09-01T08:00:00Z", "90"),                                    # older than a month before the last tick
+        ("2026-10-08T07:00:00Z", "100"), ("2026-10-08T07:00:30Z", "100.5"),  # same Berlin minute: the later one wins
+        ("2026-10-09T13:15:00Z", "104")]]
+    seed(client, [trade("a", "BUY", "5", "100", "2026-10-08T07:30:00Z")],
+         closes=[{"isin": ISIN, "day": "2026-10-08", "price": "101"}])
+    client.post("/api/ingest", headers=AUTH, json=payload(trades=[], closes=[], quotes=[], ticks=ticks))
+    v = view_data(client.app.state.conn, ISIN)
+    assert v["tlabels"] == ["2026-10-08 09:00", "2026-10-09 15:15"]        # Berlin time
+    assert v["tprices"] == [100.5, 104.0]
+    assert v["tmarkers"]["cash_buy"] == [100.5, None]                      # the buy at 09:30 sits on the 09:00 point
+    assert len(v["tma20"]) == 2 and "tlabels" not in view_data(client.app.state.conn, None)
+
+
+def test_price_chart_has_a_trendline_button(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
+    html = client.get("/").text
+    assert 'id="plTrend"' in html and "aria-pressed=\"false\"" in html     # off by default

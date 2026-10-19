@@ -16,6 +16,11 @@ def fake_call(log):
         if tool == "get_transaction_details":
             return details("-2100.99", "2100") if args["transactionId"] == "i1" else details("-25.0000", "25.0000")
         if tool == "get_security_chart":
+            if args["timeframe"] == "broken":
+                raise RuntimeError("get_security_chart failed")
+            if args["timeframe"] == "one_month":
+                return {"points": [{"midPrice": 99, "timestampUtc": "2026-10-09T08:00:00.000Z"},
+                                   {"midPrice": 100, "timestampUtc": "2026-10-09T20:59:56.000Z"}]}
             return {"points": [{"midPrice": 100, "timestampUtc": "2026-10-09T20:59:56.000Z"}]}
         if tool == "get_security_quote":
             return {"security": {"isin": args["isin"], "quote": {"midPrice": 101, "timestampUtc": "2026-10-09T20:59:56Z", "isOutdated": False}}}
@@ -80,3 +85,13 @@ def test_push_sends_bearer_and_propagates_errors():
 
     with pytest.raises(urllib.error.HTTPError):
         run.push({"trades": []}, "https://x/api/ingest", "tok", opener=bad)
+
+
+async def test_collect_stores_every_chart_point_of_every_timeframe_as_ticks(tmp_path):
+    log = []
+    body = await run.collect(fake_call(log), tmp_path, ["year_to_date", "one_month", "broken"])
+    one = [t for t in body["ticks"] if t["isin"] == "IE0000000001"]
+    # the closing point comes from both timeframes and is sent once; a failing timeframe does not stop the run
+    assert [(t["at"], t["price"]) for t in one] == [("2026-10-09T08:00:00+00:00", "99"), ("2026-10-09T20:59:56+00:00", "100")]
+    assert [c["day"] for c in body["closes"] if c["isin"] == "IE0000000001"] == ["2026-10-09"]   # closes: year_to_date only
+    assert ("get_security_chart", {"isin": "IE0000000001", "timeframe": "broken"}) in log

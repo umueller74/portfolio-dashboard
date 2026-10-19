@@ -1,10 +1,13 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
 BERLIN = ZoneInfo("Europe/Berlin")
 SIX_PLACES = Decimal("0.000001")
+# get_security_chart timeframes known to work, used when the tool schema does not list them;
+# year_to_date is the only daily one and feeds the closes
+KNOWN_TIMEFRAMES = ("year_to_date", "one_month", "max")
 
 
 def unwrap(payload):
@@ -79,6 +82,25 @@ def parse_chart(payload) -> list[dict]:
         ts = datetime.fromisoformat(p["timestampUtc"].replace("Z", "+00:00"))
         by_day[ts.astimezone(BERLIN).date().isoformat()] = str(p["midPrice"])
     return [{"day": d, "price": price} for d, price in sorted(by_day.items())]
+
+
+def parse_ticks(payload, isin: str) -> list[dict]:
+    """Every chart point as it came, oldest first, with its instant in UTC."""
+    ticks = []
+    for p in _find_points(unwrap(payload)):
+        at = datetime.fromisoformat(p["timestampUtc"].replace("Z", "+00:00")).astimezone(timezone.utc)
+        ticks.append({"isin": isin, "at": at.isoformat(), "price": str(p["midPrice"])})
+    return sorted(ticks, key=lambda t: t["at"])
+
+
+def chart_timeframes(tools: list[dict]) -> list[str]:
+    """The `timeframe` values `get_security_chart` accepts, read from its input schema."""
+    for tool in tools:
+        if tool.get("name") == "get_security_chart":
+            enum = (((tool.get("inputSchema") or {}).get("properties") or {}).get("timeframe") or {}).get("enum")
+            if enum:
+                return list(enum)
+    return list(KNOWN_TIMEFRAMES)
 
 
 def parse_quote(payload) -> dict:
