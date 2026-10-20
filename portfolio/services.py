@@ -55,12 +55,16 @@ def coarse_closes(conn, isin: str) -> list[tuple[date, Decimal]]:
     first: the broker's coarse chart points before its daily ones."""
     rows = _closes(conn).get(isin)
     first = rows[0][0] if rows else None
+    # only ticks before the first close's day (UTC, plus a day for the Berlin offset), then by Berlin day
+    query, args = "select at, price from ticks where isin=?", [isin]
+    if first is not None:
+        query, args = query + " and at < ?", [isin, (first + timedelta(days=1)).isoformat()]
     by_day: dict[date, Decimal] = {}
-    for at, price in ticks(conn, isin):
-        day = _day(at)
+    for r in conn.execute(query + " order by at", args):
+        day = _day(datetime.fromisoformat(r["at"]))
         if first is not None and day >= first:
             break
-        by_day[day] = price
+        by_day[day] = Decimal(r["price"])
     return list(by_day.items())
 
 

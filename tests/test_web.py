@@ -491,17 +491,18 @@ def test_watched_view_without_prices(client):
 def test_watched_view_with_closes(client):
     watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")   # no holdings at all
     client.post("/api/ingest", headers=AUTH, json=payload(
-        trades=[], quotes=[], closes=[{"isin": W3, "day": d, "price": p} for d, p in
+        trades=[], quotes=[{"isin": W3, "price": "120", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}],
+        closes=[{"isin": W3, "day": d, "price": p} for d, p in
                                       [("2026-01-02", "80"), ("2026-10-08", "100"), ("2026-10-09", "110")]]))
     r = client.get(f"/view/{W3}")
     assert r.status_code == 200
     v, cards = r.json()["view"], r.json()["cards"]
     assert v["watch"] is True and v["labels"] == [] and v["second"] == [80.0, 100.0, 110.0]
     assert len(v["ma20"]) == 3 and v["pmarkers"]["cash_buy"] == [None] * 3
-    assert cards["1y"]["price"] == "110.00 €"
-    assert cards["1y"]["session"] == "+10.00 € (+10.00 %)"
-    assert cards["1d"]["range"] == "+10.00 € (+10.00 %)"
-    assert cards["all"]["range"] == "+30.00 € (+37.50 %)"
+    assert cards["1y"]["price"] == "120.00 €"                         # the quote wins over the last close
+    assert cards["1y"]["session"] == "+10.00 € (+10.00 %)"            # close to close
+    assert cards["1d"]["range"] == "+20.00 € (+20.00 %)"              # ranges end at the shown price
+    assert cards["all"]["range"] == "+40.00 € (+50.00 %)"
     assert "watch" not in view_data(client.app.state.conn, None)
     assert client.get("/view/IE9999999999").status_code == 404
 
@@ -521,6 +522,7 @@ def test_coarse_ticks_prepended(client):
     ticks = [{"isin": ISIN, "at": at, "price": p} for at, p in [
         ("2025-11-03T09:00:00Z", "80"), ("2025-11-03T15:00:00Z", "81"),   # the day's last tick wins
         ("2025-12-01T22:30:00Z", "85"),                                   # 23:30 Berlin: still 2025-12-01
+        ("2026-01-01T23:30:00Z", "98"),                                   # 00:30 Berlin on the first close's day
         ("2026-01-02T10:00:00Z", "99")]]                                  # the first close's day: not coarse
     seed(client, [trade("a", "BUY", "5", "100", "2025-11-03T10:00:00Z")],
          closes=[{"isin": ISIN, "day": "2026-01-02", "price": "101"}])

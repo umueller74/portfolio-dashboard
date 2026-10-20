@@ -1,9 +1,9 @@
 """Moving-average crossover alerts for the ETFs currently held and the securities on the watchlist: a BUY
 when the 20-day average of the closes rises above the 50-day one, a SELL when it falls below. A fall below
 while the close is still above the 200-day average is a DIP instead: a pullback inside an uptrend, which
-backtests showed to be a buying chance rather than an exit. With fewer than 200 closes it stays a SELL. The last side per ETF is kept in `signals`;
-an ETF seen for the first time (or bought again after selling out, or put on the watchlist again) is recorded
-without an alert."""
+backtests showed to be a buying chance rather than an exit. With fewer than 200 closes it stays a SELL. The
+last side per ETF is kept in `signals`; an ETF seen for the first time (or bought again after selling out, or
+put on the watchlist again) is recorded without an alert."""
 import json
 import logging
 import urllib.request

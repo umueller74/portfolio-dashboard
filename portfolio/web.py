@@ -109,11 +109,12 @@ def _change(old: Decimal, new: Decimal) -> str:
 
 
 def _watch_cards(conn, today: date, isin: str) -> dict:
-    """A never-traded security's info boxes per range: its last price, the change since the session before
-    and the change over the range (from the range's first close, the one before the last for 1d)."""
+    """A never-traded security's info boxes per range: its price (the quote, else the last close), the change
+    since the session before and the change from the range's first close (the one before the last for 1d) to
+    that price."""
     rows = services._closes(conn).get(isin, [])
     quote = conn.execute("select price from quotes where isin=?", (isin,)).fetchone()
-    price = rows[-1][1] if rows else Decimal(quote["price"]) if quote else None
+    price = Decimal(quote["price"]) if quote else rows[-1][1] if rows else None
     session = _change(rows[-2][1], rows[-1][1]) if len(rows) >= 2 else "n/a"
     days = [d for d, _ in rows]
     out = {}
