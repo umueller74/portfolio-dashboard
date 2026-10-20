@@ -221,49 +221,55 @@ def fetch_state(request: Request):
     return out
 
 
-def _watchlist_call(request: Request, x_requested_with: str, method: str, path: str, body: dict | None = None):
-    """The listener's reply for a watchlist call, or the error response when the call is not allowed or fails."""
-    trigger = request.app.state.trigger
-    if trigger is None:
-        return None, JSONResponse({"error": "no fetch trigger configured"}, status_code=404)
+def _guard(request: Request, x_requested_with: str):
+    """The error response for a watchlist call that is not allowed (no trigger, no script header), else None."""
+    if request.app.state.trigger is None:
+        return JSONResponse({"error": "no fetch trigger configured"}, status_code=404)
     if x_requested_with != "fetch":
-        return None, JSONResponse({"error": "forbidden"}, status_code=403)
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+
+def _watchlist_call(request: Request, method: str, path: str, body: dict | None = None):
+    """(listener's 200 reply, None), or (None, the error response) when the listener fails or is unreachable."""
     try:
-        return trigger(method, path, body), None
+        code, reply = request.app.state.trigger(method, path, body)
     except OSError as e:
         return None, JSONResponse({"error": f"fetcher unreachable: {e}"}, status_code=502)
+    if code != 200:
+        return None, JSONResponse(reply, status_code=code)
+    return reply, None
 
 
 @router.get("/watchlist/search")
 def watchlist_search(request: Request, q: str = "", x_requested_with: str = Header(default="")):
     """The Scalable search for the popup; each hit is marked as held, already watched, or neither."""
-    reply, err = _watchlist_call(request, x_requested_with, "GET", f"/search?q={quote(q, safe='')}")
+    if err := _guard(request, x_requested_with):
+        return err
+    reply, err = _watchlist_call(request, "GET", f"/search?q={quote(q, safe='')}")
     if err:
         return err
-    code, body = reply
-    if code != 200:
-        return JSONResponse(body, status_code=code)
     conn = request.app.state.conn
     held = {h.isin for h in services.overview(conn, date.today()).holdings}
     on = watch.watched(conn)
-    for hit in body.get("results", []):
+    for hit in reply.get("results", []):
         hit["state"] = "held" if hit["isin"] in held else "watched" if hit["isin"] in on else ""
-    return body
+    return reply
 
 
 @router.post("/watchlist")
 async def watchlist_add(request: Request, x_requested_with: str = Header(default="")):
+    if err := _guard(request, x_requested_with):
+        return err
     try:
         entry = await request.json()
         isin, name, kind = entry["isin"], entry["name"], entry.get("type", "")
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, AttributeError):
         return JSONResponse({"error": "isin and name needed"}, status_code=400)
-    reply, err = _watchlist_call(request, x_requested_with, "POST", "/watchlist", {"isin": isin, "action": "add"})
+    if not all(isinstance(v, str) for v in (isin, name, kind)) or not isin or not name:
+        return JSONResponse({"error": "isin and name must be non-empty strings"}, status_code=400)
+    _, err = _watchlist_call(request, "POST", "/watchlist", {"isin": isin, "action": "add"})
     if err:
         return err
-    code, body = reply
-    if code != 200:
-        return JSONResponse(body, status_code=code)
     conn = request.app.state.conn
     watch.remember(conn, isin, name, kind)
     watch.manual(conn, isin, True)
@@ -276,12 +282,11 @@ async def watchlist_add(request: Request, x_requested_with: str = Header(default
 
 @router.delete("/watchlist/{isin}")
 def watchlist_remove(request: Request, isin: str, x_requested_with: str = Header(default="")):
-    reply, err = _watchlist_call(request, x_requested_with, "POST", "/watchlist", {"isin": isin, "action": "remove"})
+    if err := _guard(request, x_requested_with):
+        return err
+    _, err = _watchlist_call(request, "POST", "/watchlist", {"isin": isin, "action": "remove"})
     if err:
         return err
-    code, body = reply
-    if code != 200:
-        return JSONResponse(body, status_code=code)
     watch.manual(request.app.state.conn, isin, False)
     return {"status": "ok"}
 

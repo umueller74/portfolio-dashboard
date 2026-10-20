@@ -348,9 +348,11 @@ def test_add_stores_entry_and_starts_fetch(tmp_path):
 
 
 def test_add_with_a_running_fetch_is_fine(tmp_path):
-    c = wl_client(tmp_path, FakeTrigger(post=(409, {"status": "running"})))
+    trig = FakeTrigger(post=(409, {"status": "running"}))
+    c = wl_client(tmp_path, trig)
     r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": ""}, headers=XHR)
     assert r.status_code == 200 and r.json() == {"status": "ok"}
+    assert trig.requests[-1] == ("POST", "/fetch", None)   # attempted; its 409 is fine
 
 
 def test_add_turns_auto_row_manual(tmp_path):
@@ -405,3 +407,37 @@ def test_search_short_query_and_listener_down(tmp_path):
     r = c.get("/watchlist/search", params={"q": "abc"}, headers=XHR)
     assert r.status_code == 502 and "refused" in r.json()["error"]
     assert c.delete("/watchlist/I", headers=XHR).status_code == 502
+
+
+def test_add_needs_a_trigger_and_a_valid_body(client, tmp_path):
+    assert client.post("/watchlist", content=b"junk", headers=XHR).status_code == 404
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    assert c.post("/watchlist", content=b"junk").status_code == 403
+    for bad in (b"junk", b"[1]", b'{"isin": "I"}', b'{"isin": "", "name": "N"}', b'{"isin": 5, "name": "N"}',
+                b'{"isin": "I", "name": "N", "type": 3}'):
+        r = c.post("/watchlist", content=bad, headers={**XHR, "Content-Type": "application/json"})
+        assert r.status_code == 400, bad
+    assert trig.requests == []
+
+
+def test_add_with_unreachable_fetcher_is_a_502(tmp_path):
+    c = wl_client(tmp_path, FakeTrigger(watchlist=OSError("refused")))
+    r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": ""}, headers=XHR)
+    assert r.status_code == 502 and "refused" in r.json()["error"]
+
+
+def test_trigger_client_turns_a_non_json_reply_into_an_oserror():
+    import io
+    from portfolio.refresh import trigger_client as make
+
+    class Resp(io.BytesIO):
+        status = 502
+
+    call = make("http://raspi2:8770/fetch", "tok", lambda req, timeout: Resp(b"<html>Bad Gateway</html>"))
+    try:
+        call("GET", "/search?q=abc")
+    except OSError as e:
+        assert "invalid reply" in str(e)
+    else:
+        raise AssertionError("expected OSError")

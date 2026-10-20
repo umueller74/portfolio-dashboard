@@ -19,9 +19,12 @@ def trigger_client(url: str | None, token: str, opener=urllib.request.urlopen):
         req = urllib.request.Request(base + path, method=method, headers=headers,
                                      data=None if body is None else json.dumps(body).encode())
         try:
-            with opener(req, timeout=10) as resp:
-                return resp.status, json.loads(resp.read())
-        except urllib.error.HTTPError as e:   # 409 (already running) and 401 carry a JSON body too
-            return e.code, json.loads(e.read() or b"{}")
+            try:
+                with opener(req, timeout=10) as resp:
+                    return resp.status, json.loads(resp.read())
+            except urllib.error.HTTPError as e:   # 409 (already running) and 401 carry a JSON body too
+                return e.code, json.loads(e.read() or b"{}")
+        except ValueError as e:                   # e.g. an HTML error page from a proxy
+            raise OSError(f"invalid reply from the listener: {e}") from e
 
     return call
