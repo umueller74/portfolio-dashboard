@@ -155,10 +155,10 @@ const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
   });
   ctx.restore();
 }};
-// the ETF price chart's change over the range is measured from its first price (the chart's `baseline`); maximized,
-// a line marks that price and the prices above it are green, those below red
+// the ETF price chart's change over the range is measured from its first price (the chart's `baseline`); a line
+// marks that price and the prices above it are green, those below red
 const PRICE = '#c4b5fd';
-const baseOn = chart => chart.baseline != null && plBox.classList.contains('max');
+const baseOn = chart => chart.baseline != null;
 const baseLine = {id: 'baseLine', beforeDatasetsDraw(chart) {
   if (!baseOn(chart)) return;
   const {ctx, chartArea: a, scales: {y}} = chart, py = Math.round(y.getPixelForValue(chart.baseline)) + .5;
@@ -328,7 +328,6 @@ function maximize(on) {
   plBox.classList.toggle('max', on);
   maxBtn.textContent = on ? '✕' : '⤢';
   maxBtn.title = on ? 'Restore (Esc)' : 'Maximize';
-  if (charts[1]) charts[1].update('none');   // the baseline and its colours show maximized only
 }
 trendBtn.onclick = e => {
   e.stopPropagation();
