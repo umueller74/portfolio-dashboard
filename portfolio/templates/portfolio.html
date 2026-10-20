@@ -178,7 +178,7 @@ function priceLine(c) {
   g.addColorStop(0, GREEN); g.addColorStop(f, GREEN); g.addColorStop(f, RED); g.addColorStop(1, RED);
   return g;
 }
-const priceDot = c => !baseOn(c.chart) ? PRICE : c.parsed.y >= c.chart.baseline ? GREEN : RED;
+const priceDot = c => !baseOn(c.chart) || !c.parsed ? PRICE : c.parsed.y >= c.chart.baseline ? GREEN : RED;
 const plChange = document.getElementById('plChange');
 function showChange(first, last) {   // after the price chart's title, coloured by its sign
   const pct = first && last != null ? (last - first) / first * 100 : null;
@@ -346,32 +346,39 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') maximize(fal
 // range and ETF live in the URL, so a reload (e.g. after "Fetch now") comes back to the same view
 const syncUrl = () => history.replaceState(null, '', '?range=' + rangeKey + (isin ? '&etf=' + encodeURIComponent(isin) : ''));
 
-function applyRange() {
+// the zoomable chart's data: every price point or the daily closes, all of it (the window picks the part shown)
+function showVariant(ch, v) {
+  if (ch.shown !== v) {
+    ch.shown = v;
+    ch.setActiveElements([]); ch.tooltip.setActiveElements([], {x: 0, y: 0});   // hovered points of the old data
+    ch.data.labels = v.labels;
+    ch.data.datasets.forEach((ds, i) => ds.data = v.full[i]);
+  }
+  ch.data.ticksShown = v === ch.variants.ticks;   // trendlines exist only over every price point
+  Object.assign(ch, {offset: 0, markers: v.markers});
+  if (ch.variants.ticks) ch.data.datasets[0].pointRadius = v.pointRadius || 0;   // every price point as a dot
+}
+
+// keepWindow: the range follows a zoom of the price chart, which keeps its window (and data) as they are
+function applyRange(keepWindow = false) {
   document.querySelectorAll('.btn[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === rangeKey));
   syncUrl(); renderTable();   // the table shows the range's trades only
   if (!view()) return;   // the ETF is still loading: build() applies the range when it is in
   for (const ch of charts) {
     const v = ch.variants.ticks && TICK_RANGES.includes(rangeKey) ? ch.variants.ticks : ch.variants.daily;
-    ch.data.ticksShown = v === ch.variants.ticks;   // trendlines exist only over every price point
     if (ch.zoomable) {   // all data stays, the range only sets the window: from its start to the last real point
-      const real = v.real, start = Math.min(rangeStart(v.labels.slice(0, real), rangeKey), real - 1);
-      if (ch.shown !== v) {
-        ch.shown = v;
-        ch.data.labels = v.labels;
-        ch.data.datasets.forEach((ds, i) => ds.data = v.full[i]);
-      }
-      Object.assign(ch, {offset: 0, markers: v.markers});
-      setWindow(ch, Math.max(start, 0), real - 1);
-      ch.baseline = v.full[0][Math.max(start, 0)];
+      const real = v.real, start = Math.max(Math.min(rangeStart(v.labels.slice(0, real), rangeKey), real - 1), 0);
+      if (!keepWindow) { showVariant(ch, v); setWindow(ch, start, real - 1); }
+      ch.baseline = v.full[0][start];
       showChange(ch.baseline, v.full[0][real - 1]);
     } else {
       const start = rangeStart(v.labels, rangeKey);
+      ch.data.ticksShown = false;
       Object.assign(ch, {offset: start, markers: v.markers});
       ch.data.labels = v.labels.slice(start);
       ch.data.datasets.forEach((ds, i) => ds.data = v.full[i].slice(start));
     }
-    if (ch.variants.ticks) ch.data.datasets[0].pointRadius = v.pointRadius || 0;   // every price point as a dot
-    ch.update();
+    ch.update(keepWindow && ch.zoomable ? 'none' : undefined);
   }
   const c = D.cards[isin][rangeKey];
   if (view().watch) {   // a never-traded (watched) security: its price boxes only
@@ -395,6 +402,47 @@ function clampWindow(ch, min, max) {
   min = Math.max(0, Math.min(min, last - width));
   return [Math.round(min), Math.round(min + width)];
 }
+// labels sort as strings ("YYYY-MM-DD" before its "YYYY-MM-DD HH:MM"): the first one from `label` on, the last
+// one up to the end of `label`'s day
+function below(labels, label) {   // how many labels sort before `label`
+  let lo = 0, hi = labels.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (labels[m] < label) lo = m + 1; else hi = m; }
+  return lo;
+}
+const firstFrom = (labels, label) => Math.min(below(labels, label), labels.length - 1);
+const lastOfDay = (labels, label) => Math.max(below(labels, label.slice(0, 10) + '~') - 1, 0);
+// a window of the other kind of data over the same days
+const mapWindow = (from, to, min, max) => [firstFrom(to.labels, from.labels[min].slice(0, 10)), lastOfDay(to.labels, from.labels[max])];
+// the days a window covers (a close counts its whole day), and the narrowest range that holds them
+const labelMs = l => Date.parse(l.length > 10 ? l.replace(' ', 'T') : l + 'T00:00');
+const spanDays = (labels, min, max) => (labelMs(labels[max]) - labelMs(labels[min])) / 864e5 + (labels[max].length > 10 ? 0 : 1);
+function rangeFor(days) {
+  const ytd = (labelMs(D.today) - labelMs(D.today.slice(0, 4) + '-01-01')) / 864e5 + 1;
+  const fits = Object.entries({...D.rangeDays, ytd}).filter(([, n]) => n >= days - 1e-9).sort((a, b) => a[1] - b[1]);
+  return fits.length ? fits[0][0] : 'all';
+}
+// a wheel zoom of the time axis: the range follows the window, and with it the data, every price point while the
+// window fits the 1d, 1w or 1m range and lies within them, the daily closes otherwise (also when zooming out past
+// the first price point: the closes reach further back)
+function zoomTime(ch, at, f) {
+  const {ticks, daily} = ch.variants, x = ch.scales.x;
+  let v = ch.shown, min = at - (at - x.min) * f, max = at + (x.max - at) * f;
+  if (ticks && v === ticks && min < 0) {   // out of the price points: the same zoom over the closes
+    const [dmin, dmax] = mapWindow(ticks, daily, Math.round(x.min), Math.round(x.max)), dat = lastOfDay(daily.labels, ticks.labels[Math.round(at)]);
+    v = daily; min = dat - (dat - dmin) * f; max = dat + (dmax - dat) * f;
+  }
+  showVariant(ch, v);
+  [min, max] = clampWindow(ch, min, max);
+  if (ticks) {
+    const want = TICK_RANGES.includes(rangeFor(spanDays(v.labels, min, max)))
+      && v.labels[min] >= ticks.labels[0].slice(0, 10) ? ticks : daily;
+    if (want !== v) { [min, max] = mapWindow(v, want, min, max); v = want; showVariant(ch, v); [min, max] = clampWindow(ch, min, max); }
+  }
+  setWindow(ch, min, max, ch.options.scales.y.min, ch.options.scales.y.max);
+  const key = rangeFor(spanDays(v.labels, min, max));
+  if (key !== rangeKey) { rangeKey = key; applyRange(true); }
+  else ch.update('none');
+}
 pnlCanvas.addEventListener('wheel', e => {
   const ch = zoomChart();
   if (!ch) return;
@@ -403,12 +451,8 @@ pnlCanvas.addEventListener('wheel', e => {
   if (e.ctrlKey) {
     const at = y.getValueForPixel(e.offsetY);
     setWindow(ch, x.min, x.max, at - (at - y.min) * f, at + (y.max - at) * f);
-  } else {
-    const at = Math.min(Math.max(x.getValueForPixel(e.offsetX), x.min), x.max);
-    const [min, max] = clampWindow(ch, at - (at - x.min) * f, at + (x.max - at) * f);
-    setWindow(ch, min, max, ch.options.scales.y.min, ch.options.scales.y.max);
-  }
-  ch.update('none');
+    ch.update('none');
+  } else zoomTime(ch, Math.min(Math.max(x.getValueForPixel(e.offsetX), x.min), x.max), f);
 }, {passive: false});
 let drag = null, dragged = false;
 pnlCanvas.addEventListener('mousedown', e => {
