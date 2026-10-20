@@ -16,6 +16,7 @@
  .maxranges{display:none;gap:.4rem;margin:0 .8rem 0 auto}.chart.max .maxranges{display:flex}
  .maxranges .btn{padding:.1rem .6rem;font-weight:400}.maxranges .btn.active{font-weight:600}
  .chart.zoomable{cursor:zoom-in}.chart.max canvas{cursor:grab}.chart canvas.dragging{cursor:grabbing}
+ #plChange{font-weight:600;margin-left:.4rem}
  #plTrend{margin-right:.4rem}#plTrend[aria-pressed=true]{color:var(--orange);border-color:var(--orange)}
  .chart.max{position:fixed;inset:1.5rem;z-index:10;cursor:auto;box-shadow:0 0 0 100vmax rgba(0,0,0,.6)}
  .chart.max div{height:calc(100% - 2.2rem)}
@@ -64,7 +65,7 @@
 <div class="bar" id="ranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r|upper }}</button>{% endfor %}</div>
 <div class="charts">
  <div class="chart"><h3 id="viTitle">Value and invested (EUR)</h3><div><canvas id="valueChart"></canvas></div></div>
- <div class="chart"><h3><span id="plTitle">Profit / Loss (EUR)</span>
+ <div class="chart"><h3><span><span id="plTitle">Profit / Loss (EUR)</span><span id="plChange"></span></span>
   <span class="maxranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r|upper }}</button>{% endfor %}</span><button class="maxbtn" id="plTrend" title="Trendlines of the last day, week and month (shown in the 1D, 1W and 1M ranges; switches to 1M from longer ones)" aria-pressed="false" hidden>Trendlines</button><button class="maxbtn" id="plMax" title="Maximize" hidden>⤢</button></h3><div><canvas id="pnlChart"></canvas></div></div>
 </div>
 
@@ -154,6 +155,37 @@ const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
   });
   ctx.restore();
 }};
+// the ETF price chart's change over the range is measured from its first price (the chart's `baseline`); maximized,
+// a line marks that price and the prices above it are green, those below red
+const PRICE = '#c4b5fd';
+const baseOn = chart => chart.baseline != null && plBox.classList.contains('max');
+const baseLine = {id: 'baseLine', beforeDatasetsDraw(chart) {
+  if (!baseOn(chart)) return;
+  const {ctx, chartArea: a, scales: {y}} = chart, py = Math.round(y.getPixelForValue(chart.baseline)) + .5;
+  if (py < a.top || py > a.bottom) return;
+  ctx.save(); ctx.strokeStyle = '#e5e7eb'; ctx.globalAlpha = .7; ctx.lineWidth = 1; ctx.setLineDash([6, 4]);
+  ctx.beginPath(); ctx.moveTo(a.left, py); ctx.lineTo(a.right, py); ctx.stroke();
+  ctx.restore();
+}};
+// the connecting line: a gradient that switches from green to red exactly at the baseline's height
+function priceLine(c) {
+  const ch = c.chart;
+  if (!baseOn(ch) || !ch.chartArea) return PRICE;
+  const {top, bottom} = ch.chartArea, f = (ch.scales.y.getPixelForValue(ch.baseline) - top) / (bottom - top);
+  if (f <= 0) return RED;   // the whole window lies below the baseline
+  if (f >= 1) return GREEN;
+  const g = ch.ctx.createLinearGradient(0, top, 0, bottom);
+  g.addColorStop(0, GREEN); g.addColorStop(f, GREEN); g.addColorStop(f, RED); g.addColorStop(1, RED);
+  return g;
+}
+const priceDot = c => !baseOn(c.chart) ? PRICE : c.parsed.y >= c.chart.baseline ? GREEN : RED;
+const plChange = document.getElementById('plChange');
+function showChange(first, last) {   // after the price chart's title, coloured by its sign
+  const pct = first && last != null ? (last - first) / first * 100 : null;
+  plChange.textContent = pct === null ? '' : pct.toLocaleString('en', {minimumFractionDigits: 2,
+    maximumFractionDigits: 2, signDisplay: 'always'}) + ' % in ' + rangeKey.toUpperCase();
+  plChange.className = pct === null ? '' : pct >= 0 ? 'pos' : 'neg';
+}
 const GRID = 'rgba(255,255,255,.08)';
 const xTicks = {autoSkip: false, maxRotation: 0, callback(val, i, ticks) {
   const labels = this.chart.data.labels, first = ticks[0].value, last = ticks[ticks.length - 1].value;
@@ -250,7 +282,8 @@ function build() {
     ? {label: 'Profit / Loss (EUR)', data: v.second, pointRadius: 0, tension: .1, order: 2, borderColor: GREEN,
        segment: {borderColor: c => (c.p0.parsed.y + c.p1.parsed.y) >= 0 ? GREEN : RED},
        fill: {target: 'origin', above: 'rgba(74,222,128,.15)', below: 'rgba(248,113,113,.15)'}}
-    : {label: 'Price (EUR)', data: v.second, pointRadius: 0, tension: .1, order: 2, borderColor: '#c4b5fd'};
+    : {label: 'Price (EUR)', data: v.second, pointRadius: 0, tension: .1, order: 2, borderColor: priceLine,
+       pointBorderColor: priceDot};
   // 20/50-day averages: computed over the ETF's whole history, so every range shows them from its first day
   const averages = all ? [] : [['MA 20d', v.ma20, '#38bdf8'], ['MA 50d', v.ma50, '#f472b6']].map(([label, data, color]) =>
     ({label, data, borderColor: color, borderWidth: 1.5, pointRadius: 0, tension: .1, order: 2}));
@@ -261,7 +294,7 @@ function build() {
     // the price chart has its own days: an ETF's price history reaches back before its first trade
     ['pnlChart', [second, ...averages, ...markerDatasets(v.pmarkers, v.second)], 1 + averages.length, v.plabels, v.pmarkers]];
   charts = specs.map(([el, datasets, lines, labels, markers]) => {
-    const chart = new Chart(document.getElementById(el), {type: 'line', data: {labels, datasets}, options: options(lines), plugins: [tradeLines]});
+    const chart = new Chart(document.getElementById(el), {type: 'line', data: {labels, datasets}, options: options(lines), plugins: [tradeLines, baseLine]});
     chart.variants = {daily: {labels, full: datasets.map(d => d.data), markers}};
     return chart;
   });
@@ -281,6 +314,7 @@ function build() {
     }
     pc.zoomable = true;   // wheel, drag and ctrl+wheel move this chart; ranges set its window instead of cutting
   }
+  showChange(null);   // the price chart's applyRange sets it
   trendBtn.hidden = all;
   maxBtn.hidden = all;
   plBox.classList.toggle('zoomable', !all);
@@ -294,6 +328,7 @@ function maximize(on) {
   plBox.classList.toggle('max', on);
   maxBtn.textContent = on ? '✕' : '⤢';
   maxBtn.title = on ? 'Restore (Esc)' : 'Maximize';
+  if (charts[1]) charts[1].update('none');   // the baseline and its colours show maximized only
 }
 trendBtn.onclick = e => {
   e.stopPropagation();
@@ -328,6 +363,8 @@ function applyRange() {
       }
       Object.assign(ch, {offset: 0, markers: v.markers});
       setWindow(ch, Math.max(start, 0), real - 1);
+      ch.baseline = v.full[0][Math.max(start, 0)];
+      showChange(ch.baseline, v.full[0][real - 1]);
     } else {
       const start = rangeStart(v.labels, rangeKey);
       Object.assign(ch, {offset: start, markers: v.markers});

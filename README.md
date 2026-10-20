@@ -30,6 +30,8 @@ later price below (above) the line.
 The ETF price chart moves: the mouse wheel zooms the time axis around the pointer, a left drag pans it, ctrl+wheel
 scales the y axis; it reaches 65 trading days (daily closes) or 20 sessions (price points) into the future, where
 the trendlines continue. A range button or a double-click resets the window; a click without dragging maximizes.
+Its title shows the price's change over the selected range, from the range's first price to the last one;
+maximized, a dashed line marks that first price, and the prices (line and dots) above it are green, those below red.
 
 Fetch now: with `FETCH_TRIGGER_URL` set (the fetcher host's listener, e.g. `http://raspi2:8770/fetch`), the page shows
 a "Fetch now" button. It posts to `/fetch` (behind the page's basicAuth, not `/api`), the app calls the listener with
