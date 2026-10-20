@@ -137,7 +137,7 @@ const daysBetween = (a, b) => (Date.parse(b.slice(0, 10)) - Date.parse(a.slice(0
 const modeFor = (a, b) => { const n = daysBetween(a, b);
   return n <= 2 && b.length > 10 ? 'hour' : n <= 45 ? 'day' : n <= 550 ? 'month' : 'year'; };
 const periodOf = (l, m) => m === 'hour' ? l.slice(0, 13) : m === 'day' ? l.slice(0, 10) : m === 'month' ? l.slice(0, 7) : l.slice(0, 4);
-const showOf = (l, m) => m === 'hour' ? l.slice(11, 13) + ':00' : m === 'day' ? String(parseInt(l.slice(8, 10), 10))
+const showOf = (l, m) => m === 'hour' && l.length > 10 ? l.slice(11, 13) + ':00' : m === 'day' || m === 'hour' ? String(parseInt(l.slice(8, 10), 10))
   : m === 'month' ? new Date(l + 'T00:00:00Z').toLocaleDateString('en', {month: 'short', timeZone: 'UTC'}) : l.slice(0, 4);
 // a vertical line per trade day, coloured like its marker; drawn behind the data
 const tradeLines = {id: 'tradeLines', beforeDatasetsDraw(chart) {
@@ -190,12 +190,12 @@ const GRID = 'rgba(255,255,255,.08)';
 const xTicks = {autoSkip: false, maxRotation: 0, callback(val, i, ticks) {
   const labels = this.chart.data.labels, first = ticks[0].value, last = ticks[ticks.length - 1].value;
   const m = modeFor(labels[first], labels[last]);
-  if (i === 0) {   // the first label is dropped when the next period starts so soon that the two would overlap
-    let next = first + 1;
-    while (next <= last && periodOf(labels[next], m) === periodOf(labels[first], m)) next++;
-    return next <= last && next - first < ticks.length / 25 ? '' : showOf(labels[val], m);
-  }
-  return periodOf(labels[val], m) !== periodOf(labels[val - 1], m) ? showOf(labels[val], m) : '';
+  if (i > 0 && periodOf(labels[val], m) === periodOf(labels[val - 1], m)) return '';
+  // a label is dropped when the next period starts so soon that the two would overlap (the first label, or days
+  // of one close each before the price points)
+  let next = val + 1;
+  while (next <= last && periodOf(labels[next], m) === periodOf(labels[val], m)) next++;
+  return next <= last && next - val < ticks.length / 25 ? '' : showOf(labels[val], m);
 }};
 
 // markers: same trades on both charts, on each chart's own days, y taken from that chart's own series
@@ -255,7 +255,7 @@ const trendBtn = document.getElementById('plTrend');
 // where a range starts in a chart's labels: 1d is the last session (its price points, or the last two closes)
 function rangeStart(labels, key) {
   if (key === '1d') {
-    if (labels.length && labels[0].length > 10) {
+    if (labels.length && labels[labels.length - 1].length > 10) {
       const last = labels[labels.length - 1].slice(0, 10), i = labels.findIndex(l => l.startsWith(last));
       return i;
     }
@@ -305,11 +305,14 @@ function build() {
         borderColor: color, borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, order: 1});
     pc.variants.daily.full.push(...TRENDS.flatMap(() => [v.second.map(() => null), v.second.map(() => null)]));
     pc.variants.daily = withFuture(pc.variants.daily, FUTURE_SESSIONS.daily);
-    if (n) {
-      const t = withFuture({labels: v.tlabels, markers: v.tmarkers, pointRadius: 2, full: [
-        v.tprices, v.tma20, v.tma50, ...markerDatasets(v.tmarkers, v.tprices).map(d => d.data)]}, FUTURE_SESSIONS.ticks);
+    if (n) {   // the price points continue the closes of the days before them: one series over the whole history
+      const k = below(v.plabels, v.tlabels[0].slice(0, 10)), head = a => a.slice(0, k);
+      const labels = head(v.plabels).concat(v.tlabels), prices = head(v.second).concat(v.tprices);
+      const markers = Object.fromEntries(Object.keys(v.tmarkers).map(c => [c, head(v.pmarkers[c]).concat(v.tmarkers[c])]));
+      const t = withFuture({labels, markers, pointRadius: 2, full: [prices, head(v.ma20).concat(v.tma20),
+        head(v.ma50).concat(v.tma50), ...markerDatasets(markers, prices).map(d => d.data)]}, FUTURE_SESSIONS.ticks);
       t.full.push(...TRENDS.flatMap(([, key]) => [true, false].map(up =>
-        trendline(v.tprices, rangeStart(v.tlabels, key), up, t.labels.length))));
+        trendline(prices, rangeStart(labels, key), up, t.labels.length))));
       pc.variants.ticks = t;
     }
     pc.zoomable = true;   // wheel, drag and ctrl+wheel move this chart; ranges set its window instead of cutting
@@ -421,21 +424,15 @@ function rangeFor(days) {
   const fits = Object.entries({...D.rangeDays, ytd}).filter(([, n]) => n >= days - 1e-9).sort((a, b) => a[1] - b[1]);
   return fits.length ? fits[0][0] : 'all';
 }
-// a wheel zoom of the time axis: the range follows the window, and with it the data, every price point while the
-// window fits the 1d, 1w or 1m range and lies within them, the daily closes otherwise (also when zooming out past
-// the first price point: the closes reach further back)
+// a wheel zoom of the time axis: the range follows the window, and with it the data, every price point (the
+// closes before the first one) while the x axis lists days or hours, the daily closes otherwise
 function zoomTime(ch, at, f) {
   const {ticks, daily} = ch.variants, x = ch.scales.x;
   let v = ch.shown, min = at - (at - x.min) * f, max = at + (x.max - at) * f;
-  if (ticks && v === ticks && min < 0) {   // out of the price points: the same zoom over the closes
-    const [dmin, dmax] = mapWindow(ticks, daily, Math.round(x.min), Math.round(x.max)), dat = lastOfDay(daily.labels, ticks.labels[Math.round(at)]);
-    v = daily; min = dat - (dat - dmin) * f; max = dat + (dmax - dat) * f;
-  }
   showVariant(ch, v);
   [min, max] = clampWindow(ch, min, max);
-  if (ticks) {
-    const want = TICK_RANGES.includes(rangeFor(spanDays(v.labels, min, max)))
-      && v.labels[min] >= ticks.labels[0].slice(0, 10) ? ticks : daily;
+  if (ticks) {   // every price point as soon as the x axis lists days or hours
+    const want = ['hour', 'day'].includes(modeFor(v.labels[min], v.labels[max])) ? ticks : daily;
     if (want !== v) { [min, max] = mapWindow(v, want, min, max); v = want; showVariant(ch, v); [min, max] = clampWindow(ch, min, max); }
   }
   setWindow(ch, min, max, ch.options.scales.y.min, ch.options.scales.y.max);

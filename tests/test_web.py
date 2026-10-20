@@ -136,19 +136,30 @@ def test_maximized_price_chart_has_its_own_range_buttons(client):
     assert html.count('class="btn active" data-range="3m"') == 2      # bar and header agree
 
 
-def test_etf_view_has_every_price_point_of_the_last_month(client):
+def test_etf_view_has_every_price_point_from_the_first_detailed_day_on(client):
     ticks = [{"isin": ISIN, "at": at, "price": p} for at, p in [
-        ("2026-09-01T08:00:00Z", "90"),                                    # older than a month before the last tick
+        ("2026-06-01T08:00:00Z", "80"), ("2026-06-02T08:00:00Z", "81"),    # coarse: one price per day
+        ("2026-07-01T07:00:00Z", "90"), ("2026-07-01T07:00:30Z", "90.5"),  # same Berlin minute: one price only
+        ("2026-08-03T07:00:00Z", "95"), ("2026-08-03T08:00:00Z", "96"),    # first day with two: detail from here
+        ("2026-08-04T15:00:00Z", "97"),                                    # a later day with one price stays
         ("2026-10-08T07:00:00Z", "100"), ("2026-10-08T07:00:30Z", "100.5"),  # same Berlin minute: the later one wins
         ("2026-10-09T13:15:00Z", "104")]]
     seed(client, [trade("a", "BUY", "5", "100", "2026-10-08T07:30:00Z")],
          closes=[{"isin": ISIN, "day": "2026-10-08", "price": "101"}])
     client.post("/api/ingest", headers=AUTH, json=payload(trades=[], closes=[], quotes=[], ticks=ticks))
     v = view_data(client.app.state.conn, ISIN)
-    assert v["tlabels"] == ["2026-10-08 09:00", "2026-10-09 15:15"]        # Berlin time
-    assert v["tprices"] == [100.5, 104.0]
-    assert v["tmarkers"]["cash_buy"] == [100.5, None]                      # the buy at 09:30 sits on the 09:00 point
-    assert len(v["tma20"]) == 2 and "tlabels" not in view_data(client.app.state.conn, None)
+    assert v["tlabels"] == ["2026-08-03 09:00", "2026-08-03 10:00", "2026-08-04 17:00",  # Berlin time, no month limit
+                            "2026-10-08 09:00", "2026-10-09 15:15"]
+    assert v["tprices"] == [95.0, 96.0, 97.0, 100.5, 104.0]
+    assert v["tmarkers"]["cash_buy"] == [None, None, None, 100.5, None]   # the buy at 09:30 sits on the 09:00 point
+    assert len(v["tma20"]) == 5 and "tlabels" not in view_data(client.app.state.conn, None)
+
+
+def test_etf_view_without_a_detailed_day_has_no_price_points(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-10-08T07:30:00Z")])
+    ticks = [{"isin": ISIN, "at": "2026-10-08T07:00:00Z", "price": "100"}]
+    client.post("/api/ingest", headers=AUTH, json=payload(trades=[], closes=[], quotes=[], ticks=ticks))
+    assert view_data(client.app.state.conn, ISIN)["tlabels"] == []
 
 
 def test_price_chart_has_a_trendline_button(client):

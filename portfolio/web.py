@@ -1,4 +1,5 @@
-from datetime import date, datetime, timedelta, timezone
+from collections import Counter
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
@@ -174,17 +175,17 @@ def view_data(conn, isin: str | None) -> dict:
     return out
 
 
-TICK_DAYS = 31   # every stored price is shown for the short ranges (1d, 1w, 1m) only
-
-
 def tick_data(conn, isin: str) -> dict:
-    """Every price of the ETF's last month, one per Berlin minute (the later wins), for the price chart in the
-    short ranges: `tlabels` (Berlin "YYYY-MM-DD HH:MM"), `tprices`, the day's averages and the trade markers."""
-    rows = services.ticks(conn, isin)
-    if not rows:
+    """Every price of the ETF, one per Berlin minute (the later wins), from the first Berlin day with prices at two
+    minutes on (before it the broker's points are one per day, like the closes), for the price chart's detail:
+    `tlabels` (Berlin "YYYY-MM-DD HH:MM"), `tprices`, the day's averages and the trade markers."""
+    by_minute = {at.astimezone(services.BERLIN).replace(second=0, microsecond=0): float(p)
+                 for at, p in services.ticks(conn, isin)}
+    per_day = Counter(t.date() for t in by_minute)
+    first = next((t.date() for t in by_minute if per_day[t.date()] > 1), None)
+    if first is None:
         return {"tlabels": [], "tprices": [], "tma20": [], "tma50": [], "tmarkers": marker_series({}, [], [])}
-    since = rows[-1][0] - timedelta(days=TICK_DAYS)
-    by_minute = {at.astimezone(services.BERLIN).replace(second=0, microsecond=0): float(p) for at, p in rows if at >= since}
+    by_minute = {t: p for t, p in by_minute.items() if t.date() >= first}
     points, prices = list(by_minute), list(by_minute.values())
     markers = services.trade_markers(conn, points, isin, at=lambda t: t.executed_at)
     out = {"tlabels": [p.strftime("%Y-%m-%d %H:%M") for p in points], "tprices": prices,
