@@ -165,3 +165,35 @@ def test_telegram_sender_posts_to_the_bot_api():
 
 def test_telegram_sender_is_none_without_credentials():
     assert signals.telegram_sender("", "42") is None and signals.telegram_sender("123:abc", None) is None
+
+
+def test_signal_for_watched_isin(client):
+    from portfolio import watch
+    conn = client.app.state.conn
+    held(client, UP)
+    watch.remember(conn, "IE00000000W3", "Zeta Corp", "STOCK")    # never traded, only on the watchlist
+    put_closes(client, UP, isin="IE00000000W3")
+    assert signals.check(conn, EVENING, Outbox()) == [] and state(client, "IE00000000W3") == "above"
+    put_closes(client, DOWN, isin="IE00000000W3")
+    signals.check(conn, EVENING, Outbox())
+    put_closes(client, DOWN + [130] * 30, isin="IE00000000W3")
+    out = Outbox()
+    sent = signals.check(conn, EVENING, out)
+    assert [(s.isin, s.action, s.name) for s in sent] == [("IE00000000W3", "BUY", "Zeta Corp")]
+    assert "Zeta Corp (IE00000000W3)" in out[0]
+    with conn:
+        conn.execute("delete from watchlist")
+    signals.check(conn, EVENING, Outbox())
+    assert state(client, "IE00000000W3") is None                   # off the list: forgotten like a sell-out
+
+
+def test_sold_out_but_watched_keeps_being_checked(client):
+    from portfolio import watch
+    conn = client.app.state.conn
+    held(client, UP)
+    signals.check(conn, EVENING, Outbox())
+    watch.remember(conn, ISIN, "Listed", "ETF")
+    seed(client, [trade("b", "SELL", "1", "100", "2026-03-01T10:00:00Z")])   # sold out, still on the list
+    put_closes(client, DOWN)
+    sent = signals.check(conn, EVENING, Outbox())
+    assert [(s.action, s.name) for s in sent] == [("SELL", "Listed")]

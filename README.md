@@ -35,4 +35,22 @@ Fetch now: with `FETCH_TRIGGER_URL` set (the fetcher host's listener, e.g. `http
 a "Fetch now" button. It posts to `/fetch` (behind the page's basicAuth, not `/api`), the app calls the listener with
 the ingest token, and the page polls `GET /fetch` until a newer ingest has arrived, then reloads. The listener,
 `fetcher/trigger.py` (standard library, env `INGEST_TOKEN`, `FETCH_CMD`, `TRIGGER_PORT` default 8770), runs at most
-one `FETCH_CMD` at a time and reports its exit code.
+one `FETCH_CMD` at a time and reports its exit code; a start while one runs queues one follow-up run (202 "queued"),
+which begins as soon as the running one ends.
+
+Watchlist: the "Watchlist" group on the portfolio page mirrors the Scalable watchlist both ways. Each fetch, after
+the trades, applies the app's pending adds and removes (`/api/watchlist/actions`, read by `fetcher/run.py`), then
+reads the list with `list_watchlist_items`, sends it as `watchlist` (with `watchlist_read_at`, when it read it) in
+the ingest body and fetches prices for the watched ISINs too; a watched ISIN whose prices cannot be read is left
+out of that run. The ✎ popup searches Scalable's securities and adds or removes entries (`/watchlist/search`,
+`POST /watchlist`, `DELETE /watchlist/{isin}`, through the listener's `/search` and `/watchlist`), so it needs
+`FETCH_TRIGGER_URL`; its remove list holds every Scalable entry, held ones too. Adding starts a fetch (or queues one
+behind a running fetch), and an entry added after a running fetch read the list survives that fetch's ingest. A
+held ETF always shows as Active, a watched one that was never traded gets a price-only view, and watched entries get
+crossover alerts like held ones. Their history comes from justETF for ETFs, for other securities from Scalable's
+coarser points before the first close (chart only).
+
+The dashboard also edits the list itself (`portfolio/watch.py`): after a position is sold out (only sell-outs after
+the first fetch that read the list count) its ISIN is added to the Scalable watchlist once, and removed again 3
+calendar months after the sell-out if the dashboard added it. An entry that was already on the list, or that you
+added or removed in the popup, is yours and never removed automatically; buying the ISIN again pauses the clock.

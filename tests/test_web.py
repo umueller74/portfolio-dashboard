@@ -1,8 +1,10 @@
 import json
 import re
+from datetime import date
+from decimal import Decimal as D
 
-from portfolio import services
-from portfolio.web import view_data
+from portfolio import services, watch
+from portfolio.web import etf_tabs, view_data
 from tests.conftest import AUTH, payload
 from tests.test_services import ISIN, seed, trade
 
@@ -206,12 +208,18 @@ def test_responses_are_gzipped(client):
 
 
 class FakeTrigger:
-    def __init__(self, post=(202, {"status": "started"}), get=(200, {"running": True, "last_exit": None})):
-        self.replies, self.calls = {"POST": post, "GET": get}, []
+    def __init__(self, post=(202, {"status": "started"}), get=(200, {"running": True, "last_exit": None}),
+                 search=(200, {"results": []}), watchlist=(200, {"status": "ok"})):
+        self.replies, self.calls, self.requests = {"POST": post, "GET": get}, [], []
+        self.search, self.watchlist = search, watchlist
 
-    def __call__(self, method):
-        self.calls.append(method)
-        reply = self.replies[method]
+    def __call__(self, method, path="/fetch", body=None):
+        self.requests.append((method, path, body))
+        if path == "/fetch":
+            self.calls.append(method)
+            reply = self.replies[method]
+        else:
+            reply = self.search if path.startswith("/search") else self.watchlist
         if isinstance(reply, Exception):
             raise reply
         return reply
@@ -242,9 +250,14 @@ def test_fetch_starts_the_fetcher_and_reports_its_state(tmp_path):
     assert trig.calls == ["POST", "GET"]
 
 
-def test_fetch_already_running_is_passed_on(tmp_path):
-    r = trigger_client(tmp_path, FakeTrigger(post=(409, {"status": "running"}))).post("/fetch", headers=XHR)
-    assert r.status_code == 409 and r.json() == {"status": "running"}
+def test_fetch_queued_behind_a_running_one_is_passed_on(tmp_path):
+    r = trigger_client(tmp_path, FakeTrigger(post=(202, {"status": "queued"}))).post("/fetch", headers=XHR)
+    assert r.status_code == 202 and r.json() == {"status": "queued"}
+
+
+def test_fetch_now_script_waits_on_a_queued_fetch(tmp_path):
+    html = trigger_client(tmp_path, FakeTrigger()).get("/").text
+    assert "if (r.status !== 202) return fetchDone(" in html   # "started" and "queued" are both 202
 
 
 def test_fetch_needs_the_script_header(tmp_path):
@@ -282,9 +295,318 @@ def test_trigger_client_calls_the_listener_with_the_token():
     assert seen == [("POST", "http://raspi2:8770/fetch", "Bearer tok"), ("GET", "http://raspi2:8770/fetch", "Bearer tok")]
 
 
+def test_trigger_client_waits_longer_for_scalable_calls():
+    import io
+    from portfolio.refresh import trigger_client as make
+    seen = []
+
+    class Resp(io.BytesIO):
+        status = 200
+
+    def opener(req, timeout):
+        seen.append((req.full_url.removeprefix("http://raspi2:8770"), timeout))
+        return Resp(b"{}")
+
+    call = make("http://raspi2:8770/fetch", "tok", opener)
+    call("POST")
+    call("GET")
+    call("GET", "/search?q=x")
+    call("POST", "/watchlist", {"isin": "I", "action": "add"})
+    assert seen == [("/fetch", 10), ("/fetch", 10), ("/search?q=x", 30), ("/watchlist", 30)]
+
+
+def test_trigger_client_paths():
+    import io
+    from portfolio.refresh import trigger_client as make
+    seen = []
+
+    class Resp(io.BytesIO):
+        status = 200
+
+    def opener(req, timeout):
+        seen.append((req.method, req.full_url, req.data, req.get_header("Content-type")))
+        return Resp(b"{}")
+
+    call = make("http://raspi2:8770/fetch", "tok", opener)
+    call("GET", "/search?q=x")
+    call("POST", "/watchlist", {"isin": "I", "action": "add"})
+    assert seen == [("GET", "http://raspi2:8770/search?q=x", None, None),
+                    ("POST", "http://raspi2:8770/watchlist", b'{"isin": "I", "action": "add"}', "application/json")]
+
+
 def test_trade_rows_carry_their_berlin_day_for_the_range_filter(client):
     # 23:30 UTC is already the next day in Berlin: the range buttons filter on the day the table shows
     seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T23:30:00Z")])
     html = client.get("/").text
     assert f'<tr data-isin="{ISIN}" data-day="2026-01-06">' in html
     assert "tradesFrom(rangeKey)" in html
+
+
+def wl_client(tmp_path, trig):
+    from tests.test_services import seed
+    c = trigger_client(tmp_path, trig)
+    seed(c, [trade("a", "BUY", "5", "100", "2026-08-03T10:00:00Z")])
+    return c
+
+
+HIT = {"name": "N", "type": "ETF", "price": "1.5", "currency": "EUR"}
+
+
+def test_search_marks_held_and_watched(tmp_path):
+    from portfolio import watch
+    hits = [{"isin": ISIN, **HIT}, {"isin": "IE2", **HIT}, {"isin": "IE3", **HIT}]
+    trig = FakeTrigger(search=(200, {"results": hits}))
+    c = wl_client(tmp_path, trig)
+    watch.remember(c.app.state.conn, "IE2", "N", "ETF")
+    r = c.get("/watchlist/search", params={"q": "wor ld&x"}, headers=XHR)
+    assert r.status_code == 200
+    assert [h["state"] for h in r.json()["results"]] == ["held", "watched", ""]
+    assert trig.requests == [("GET", "/search?q=wor%20ld%26x", None)]
+
+
+def test_add_stores_entry_and_starts_fetch(tmp_path):
+    from portfolio import watch
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": "ETF"}, headers=XHR)
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+    assert watch.watched(c.app.state.conn)["IE2"] == {"name": "Other", "type": "ETF"}
+    assert trig.requests == [("POST", "/watchlist", {"isin": "IE2", "action": "add"}), ("POST", "/fetch", None)]
+
+
+def test_add_with_a_running_fetch_is_fine(tmp_path):
+    trig = FakeTrigger(post=(202, {"status": "queued"}))
+    c = wl_client(tmp_path, trig)
+    r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": ""}, headers=XHR)
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+    assert trig.requests[-1] == ("POST", "/fetch", None)   # queued behind the running one
+
+
+def test_remove_of_an_unsent_auto_add_skips_the_listener(tmp_path):
+    from portfolio import watch
+    trig = FakeTrigger(watchlist=OSError("must not be called"))
+    c = wl_client(tmp_path, trig)
+    conn = c.app.state.conn
+    with conn:
+        conn.execute("insert into watch_auto(isin,sold_on,state) values('IE2','2026-10-05','pending_add')")
+    r = c.delete("/watchlist/IE2", headers=XHR)
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+    assert trig.requests == []
+    assert conn.execute("select state from watch_auto where isin='IE2'").fetchone()[0] == "done"
+    assert "IE2" not in watch.watched(conn) and watch.actions(conn) == {"add": [], "remove": []}
+
+
+def test_remove_of_a_listed_pending_add_calls_the_listener(tmp_path):
+    from portfolio import watch
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    conn = c.app.state.conn
+    watch.remember(conn, "IE2", "Other", "ETF")
+    with conn:
+        conn.execute("insert into watch_auto(isin,sold_on,state) values('IE2','2026-10-05','pending_add')")
+    assert c.delete("/watchlist/IE2", headers=XHR).status_code == 200
+    assert trig.requests == [("POST", "/watchlist", {"isin": "IE2", "action": "remove"})]
+
+
+def test_add_turns_auto_row_manual(tmp_path):
+    from tests.test_watch import ENTRY, added
+    c = trigger_client(tmp_path, FakeTrigger())
+    conn = added(c)
+    conn.execute("update watch_auto set state='pending_add'")
+    conn.commit()
+    assert c.post("/watchlist", json=ENTRY, headers=XHR).status_code == 200
+    assert conn.execute("select state from watch_auto").fetchone()[0] == "done"
+
+
+def test_remove_deletes_entry(tmp_path):
+    from portfolio import watch
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    watch.remember(c.app.state.conn, "IE2", "Other", "ETF")
+    r = c.delete("/watchlist/IE2", headers=XHR)
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+    assert "IE2" not in watch.watched(c.app.state.conn)
+    assert trig.requests == [("POST", "/watchlist", {"isin": "IE2", "action": "remove"})]
+
+
+def test_failed_listener_changes_nothing(tmp_path):
+    from portfolio import watch
+    c = wl_client(tmp_path, FakeTrigger(watchlist=(502, {"error": "mcp"})))
+    r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": ""}, headers=XHR)
+    assert r.status_code == 502 and r.json() == {"error": "mcp"}
+    assert "IE2" not in watch.watched(c.app.state.conn)
+
+
+def test_watchlist_routes_need_header(tmp_path):
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    assert c.get("/watchlist/search", params={"q": "abc"}).status_code == 403
+    assert c.post("/watchlist", json={"isin": "I", "name": "N", "type": ""}).status_code == 403
+    assert c.delete("/watchlist/I").status_code == 403
+    assert trig.requests == []
+
+
+def test_watchlist_routes_need_a_trigger(client):
+    assert client.get("/watchlist/search", params={"q": "abc"}, headers=XHR).status_code == 404
+    assert client.delete("/watchlist/I", headers=XHR).status_code == 404
+
+
+def test_search_short_query_and_listener_down(tmp_path):
+    c = wl_client(tmp_path, FakeTrigger(search=(400, {"error": "query too short"})))
+    r = c.get("/watchlist/search", params={"q": "a"}, headers=XHR)
+    assert r.status_code == 400 and r.json() == {"error": "query too short"}
+    (tmp_path / "x").mkdir()
+    c = wl_client(tmp_path / "x", FakeTrigger(search=OSError("refused"), watchlist=OSError("refused")))
+    r = c.get("/watchlist/search", params={"q": "abc"}, headers=XHR)
+    assert r.status_code == 502 and "refused" in r.json()["error"]
+    assert c.delete("/watchlist/I", headers=XHR).status_code == 502
+
+
+def test_add_needs_a_trigger_and_a_valid_body(client, tmp_path):
+    assert client.post("/watchlist", content=b"junk", headers=XHR).status_code == 404
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    assert c.post("/watchlist", content=b"junk").status_code == 403
+    for bad in (b"junk", b"[1]", b'{"isin": "I"}', b'{"isin": "", "name": "N"}', b'{"isin": 5, "name": "N"}',
+                b'{"isin": "I", "name": "N", "type": 3}'):
+        r = c.post("/watchlist", content=bad, headers={**XHR, "Content-Type": "application/json"})
+        assert r.status_code == 400, bad
+    assert trig.requests == []
+
+
+def test_add_with_unreachable_fetcher_is_a_502(tmp_path):
+    c = wl_client(tmp_path, FakeTrigger(watchlist=OSError("refused")))
+    r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": ""}, headers=XHR)
+    assert r.status_code == 502 and "refused" in r.json()["error"]
+
+
+def test_trigger_client_turns_a_non_json_reply_into_an_oserror():
+    import io
+    from portfolio.refresh import trigger_client as make
+
+    class Resp(io.BytesIO):
+        status = 502
+
+    call = make("http://raspi2:8770/fetch", "tok", lambda req, timeout: Resp(b"<html>Bad Gateway</html>"))
+    try:
+        call("GET", "/search?q=abc")
+    except OSError as e:
+        assert "invalid reply" in str(e)
+    else:
+        raise AssertionError("expected OSError")
+
+
+W1, W2, W3 = "IE00000000W1", "IE00000000W2", "IE00000000W3"
+
+
+def test_tabs_groups(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W1),
+                  trade("c", "SELL", "1", "50", "2026-10-05T10:00:00Z", isin=W1),
+                  trade("d", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W2),
+                  trade("e", "SELL", "1", "50", "2026-03-05T10:00:00Z", isin=W2)])
+    conn = client.app.state.conn
+    with conn:
+        conn.execute("insert into watch_auto(isin,sold_on,state) values(?,?,?)", (W1, "2026-10-05", "added"))
+    watch.remember(conn, W3, "Zeta Corp", "STOCK")
+    watch.remember(conn, ISIN, "Held and listed", "ETF")
+    tabs = etf_tabs(conn, services.overview(conn, date(2026, 10, 20)))
+    got = [(t["isin"], t["group"], t["active"], t["traded"], len(t["rows"]), t["listed"]) for t in tabs]
+    assert got == [(ISIN, "active", True, True, 1, True), (W1, "watch", False, True, 2, False),
+                   (W3, "watch", False, False, 0, True), (W2, "inactive", False, True, 2, False)]
+    assert tabs[2]["name"] == "Zeta Corp"
+
+
+def test_page_shows_watchlist_group_between(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W2),
+                  trade("c", "SELL", "1", "50", "2026-03-05T10:00:00Z", isin=W2)])
+    watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")
+    html = client.get("/").text
+    assert html.index(">Active<") < html.index(">Watchlist<") < html.index(">Inactive<")
+    assert html.index(">Watchlist<") < html.index(f'data-isin="{W3}" title') < html.index(">Inactive<")
+    assert page_data(html)["isins"] == [ISIN, W3, W2]
+
+
+def test_watched_view_without_prices(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
+    watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")
+    r = client.get(f"/view/{W3}")
+    assert r.status_code == 200
+    v, cards = r.json()["view"], r.json()["cards"]
+    assert v["watch"] is True and v["labels"] == v["values"] == v["invested"] == []
+    assert v["plabels"] == [] and v["second"] == []
+    assert cards["1y"] == {"price": "n/a", "session": "n/a", "range": "n/a"}
+
+
+def test_watched_view_with_closes(client):
+    watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")   # no holdings at all
+    client.post("/api/ingest", headers=AUTH, json=payload(
+        trades=[], quotes=[{"isin": W3, "price": "120", "quoted_at": "2026-10-09T20:59:00Z", "outdated": False}],
+        closes=[{"isin": W3, "day": d, "price": p} for d, p in
+                                      [("2026-01-02", "80"), ("2026-10-08", "100"), ("2026-10-09", "110")]]))
+    r = client.get(f"/view/{W3}")
+    assert r.status_code == 200
+    v, cards = r.json()["view"], r.json()["cards"]
+    assert v["watch"] is True and v["labels"] == [] and v["second"] == [80.0, 100.0, 110.0]
+    assert len(v["ma20"]) == 3 and v["pmarkers"]["cash_buy"] == [None] * 3
+    assert cards["1y"]["price"] == "120.00 €"                         # the quote wins over the last close
+    assert cards["1y"]["session"] == "+10.00 € (+10.00 %)"            # close to close
+    assert cards["1d"]["range"] == "+20.00 € (+20.00 %)"              # ranges end at the shown price
+    assert cards["all"]["range"] == "+40.00 € (+50.00 %)"
+    assert "watch" not in view_data(client.app.state.conn, None)
+    assert client.get("/view/IE9999999999").status_code == 404
+
+
+def test_traded_watched_view_keeps_the_sold_etf_view(client):
+    seed(client, [trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W1),
+                  trade("c", "SELL", "1", "50", "2026-10-05T10:00:00Z", isin=W1),
+                  trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")],
+         closes=[{"isin": W1, "day": "2026-02-05", "price": "50"}])
+    watch.remember(client.app.state.conn, W1, "Listed name", "ETF")
+    j = client.get(f"/view/{W1}").json()
+    assert "watch" not in j["view"] and j["view"]["labels"] == ["2026-02-05"]
+    assert "pnl" in j["cards"]["1y"] and "range" not in j["cards"]["1y"]
+
+
+def test_coarse_ticks_prepended(client):
+    ticks = [{"isin": ISIN, "at": at, "price": p} for at, p in [
+        ("2025-11-03T09:00:00Z", "80"), ("2025-11-03T15:00:00Z", "81"),   # the day's last tick wins
+        ("2025-12-01T22:30:00Z", "85"),                                   # 23:30 Berlin: still 2025-12-01
+        ("2026-01-01T23:30:00Z", "98"),                                   # 00:30 Berlin on the first close's day
+        ("2026-01-02T10:00:00Z", "99")]]                                  # the first close's day: not coarse
+    seed(client, [trade("a", "BUY", "5", "100", "2025-11-03T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": "2026-01-02", "price": "101"}])
+    client.post("/api/ingest", headers=AUTH, json=payload(trades=[], closes=[], quotes=[], ticks=ticks))
+    conn = client.app.state.conn
+    assert services.coarse_closes(conn, ISIN) == [(date(2025, 11, 3), D("81")),
+                                                  (date(2025, 12, 1), D("85"))]
+    v = view_data(conn, ISIN)
+    assert v["plabels"] == ["2025-11-03", "2025-12-01", "2026-01-02"]
+    assert v["second"] == [81.0, 85.0, 101.0]
+    assert v["ma20"][:2] == [None, None] and v["ma50"][:2] == [None, None]
+    assert v["pmarkers"]["cash_buy"][:2] == [None, None] and len(v["pmarkers"]["tooltips"]) == 3
+    assert v["labels"] == ["2026-01-02"]                              # the value chart keeps the closes only
+
+
+def test_edit_button_only_with_trigger(client, tmp_path):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
+    assert 'id="watchEdit"' not in client.get("/").text
+    (tmp_path / "t").mkdir()
+    c = trigger_client(tmp_path / "t", FakeTrigger())
+    seed(c, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
+    html = c.get("/").text
+    assert 'id="watchEdit"' in html and 'id="watchPop"' in html
+    assert "D.groups[k] === 'watch' || D.listed[k]" in html   # the remove list: held Scalable entries too
+
+
+def test_watchlist_entries_in_page_data(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W2),
+                  trade("c", "SELL", "1", "50", "2026-03-05T10:00:00Z", isin=W2)])
+    watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")
+    watch.remember(client.app.state.conn, ISIN, "Held and listed", "ETF")
+    d = page_data(client.get("/").text)
+    assert d["isins"] == [ISIN, W3, W2] and d["groups"] == ["active", "watch", "inactive"]
+    # the popup lists every Scalable entry for removal, a held one too (it stays in Active)
+    assert d["listed"] == [True, True, False]

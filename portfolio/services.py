@@ -50,6 +50,24 @@ def ticks(conn, isin: str) -> list[tuple[datetime, Decimal]]:
             for r in conn.execute("select at, price from ticks where isin=? order by at", (isin,))]
 
 
+def coarse_closes(conn, isin: str) -> list[tuple[date, Decimal]]:
+    """For the days before the ETF's first stored close, the last stored price of each Berlin day, oldest
+    first: the broker's coarse chart points before its daily ones."""
+    rows = _closes(conn).get(isin)
+    first = rows[0][0] if rows else None
+    # only ticks before the first close's day (UTC, plus a day for the Berlin offset), then by Berlin day
+    query, args = "select at, price from ticks where isin=?", [isin]
+    if first is not None:
+        query, args = query + " and at < ?", [isin, (first + timedelta(days=1)).isoformat()]
+    by_day: dict[date, Decimal] = {}
+    for r in conn.execute(query + " order by at", args):
+        day = _day(datetime.fromisoformat(r["at"]))
+        if first is not None and day >= first:
+            break
+        by_day[day] = Decimal(r["price"])
+    return list(by_day.items())
+
+
 def _price_on(rows: list[tuple[date, Decimal]] | None, day: date) -> Decimal | None:
     if not rows:
         return None
@@ -146,13 +164,14 @@ class SeriesPoint:
 
 
 def value_series(conn, isin: str | None = None) -> list[SeriesPoint]:
-    """Daily value and invested amount, for the whole portfolio or (with `isin`) for one ETF."""
+    """Daily value and invested amount, for the whole portfolio or (with `isin`) for one ETF. The days are those
+    with a close of a traded ISIN (a watched-only security's closes add none)."""
     trades = [t for t in load_trades(conn) if isin is None or t.isin == isin]
     if not trades:
         return []
     closes = _closes(conn)
     first = _day(trades[0].executed_at)
-    sources = closes.values() if isin is None else [closes.get(isin, [])]
+    sources = [closes.get(i, []) for i in {t.isin for t in trades}] if isin is None else [closes.get(isin, [])]
     days = sorted({d for rows in sources for d, _ in rows if d >= first})
     # the trades up to a day are a prefix of these; holdings only change on a trade day, so replay only then
     trades.sort(key=lambda t: (_day(t.executed_at), t.executed_at, t.id))

@@ -33,16 +33,32 @@
  #trades{font-size:.85rem}
  #trades.hide-etf th:first-child,#trades.hide-etf td:first-child{display:none}
  #trades th:nth-child(2),#trades td:nth-child(2){text-align:left}
+ .cards .wc,.cards.watch .pf{display:none}.cards.watch .wc{display:block}
+ .charts.watch{grid-template-columns:minmax(0,1fr)}.charts.watch>.chart:first-child,.tablewrap.watch{display:none}
+ .ovrow{display:flex;position:relative}.ovrow>.btn{border-radius:0}.ovrow>:first-child{flex:1;border-top-left-radius:.6rem}
+ .ovrow>*+*{margin-left:-2px}
+ #watchPop{position:absolute;top:100%;left:0;z-index:20;width:min(36rem,90vw);margin-top:.3rem;padding:.8rem;
+  background:var(--panel);border:2px solid var(--orange);border-radius:.6rem;box-shadow:0 .5rem 1.5rem rgba(0,0,0,.5)}
+ #watchPop input{width:100%;box-sizing:border-box;font:inherit;padding:.35rem .6rem;background:var(--bg);color:var(--text);
+  border:1px solid var(--line);border-radius:.4rem}
+ #watchPop h4{margin:.8rem 0 .3rem;font-size:.85rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+ #watchPop ul{list-style:none;margin:.4rem 0 0;padding:0;max-height:16rem;overflow-y:auto}
+ #watchPop li{display:flex;align-items:center;gap:.6rem;padding:.25rem 0;border-bottom:1px solid var(--line);font-size:.85rem}
+ #watchPop li>span{flex:1}#watchPop li .btn{padding:.05rem .6rem;font-size:.8rem}
+ #watchMsg:empty{display:none}#watchMsg{margin:.5rem 0 0}
 {% endblock %}
 {% block body %}
 {% if ov.error %}<div class="err">Data error: {{ ov.error }}</div>{% endif %}
 {% if not ov.holdings %}{% if not ov.error %}<p>No data yet.</p>{% endif %}{% else %}
 <div class="cards">
- <div class="card key"><span>Value</span><b id="c-value">{{ cards[''][range].value }}</b><small id="c-value_sub">{{ cards[''][range].value_sub }}</small></div>
- <div class="card key"><span>Invested</span><b id="c-invested">{{ cards[''][range].invested }}</b><small id="c-invested_sub">{{ cards[''][range].invested_sub }}</small></div>
- <div class="card"><span>Profit / Loss</span><b id="c-pnl" class="{{ 'pos' if cards[''][range].pnl_pos else 'neg' }}">{{ cards[''][range].pnl }}</b><small id="c-pnl_sub">{{ cards[''][range].pnl_sub }}</small></div>
- <div class="card"><span>XIRR</span><b id="c-xirr">{{ cards[''][range].xirr }}</b></div>
- <div class="card"><span>Last session</span><b id="c-session">{{ cards[''][range].session }}</b></div>
+ <div class="card key pf"><span>Value</span><b id="c-value">{{ cards[''][range].value }}</b><small id="c-value_sub">{{ cards[''][range].value_sub }}</small></div>
+ <div class="card key pf"><span>Invested</span><b id="c-invested">{{ cards[''][range].invested }}</b><small id="c-invested_sub">{{ cards[''][range].invested_sub }}</small></div>
+ <div class="card pf"><span>Profit / Loss</span><b id="c-pnl" class="{{ 'pos' if cards[''][range].pnl_pos else 'neg' }}">{{ cards[''][range].pnl }}</b><small id="c-pnl_sub">{{ cards[''][range].pnl_sub }}</small></div>
+ <div class="card pf"><span>XIRR</span><b id="c-xirr">{{ cards[''][range].xirr }}</b></div>
+ <div class="card pf"><span>Last session</span><b id="c-session">{{ cards[''][range].session }}</b></div>
+ <div class="card key wc"><span>Price</span><b id="w-price"></b></div>
+ <div class="card wc"><span>Last session</span><b id="w-session"></b></div>
+ <div class="card wc"><span>Range change</span><b id="w-range"></b></div>
 </div>
 
 <div class="bar" id="ranges">{% for r in ranges %}<button class="btn{{ ' active' if r == range }}" data-range="{{ r }}">{{ r|upper }}</button>{% endfor %}</div>
@@ -53,11 +69,13 @@
 </div>
 
 <div class="split">
-<div class="side" id="etfs"><button class="btn active" data-isin="">Overview</button>
-{% for label, active in [('Active', true), ('Inactive', false)] %}{% set group = tabs|selectattr('active', 'equalto', active)|list %}{% if group %}
+<div class="side" id="etfs"><div class="ovrow"><button class="btn active" data-isin="">Overview</button>{% if fetch_enabled %}<button class="btn" id="watchEdit" title="Edit watchlist">✎</button>
+ <div id="watchPop" hidden><input id="watchQ" type="search" placeholder="Search by name or ISIN" autocomplete="off">
+  <p id="watchMsg" class="err"></p><ul id="watchHits"></ul><h4>Watchlist</h4><ul id="watchList"></ul></div>{% endif %}</div>
+{% for label, key in [('Active', 'active'), ('Watchlist', 'watch'), ('Inactive', 'inactive')] %}{% set group = tabs|selectattr('group', 'equalto', key)|list %}{% if group %}
 <div class="grp">{{ label }}</div>{% for t in group %}<button class="btn etf" data-isin="{{ t.isin }}" title="{{ t.isin }}">{{ t.name }}</button>{% endfor %}
 {% endif %}{% endfor %}</div>
-<div class="tablewrap"><table id="trades" class="hide-etf">
+<div class="tablewrap" id="tradesBox"><table id="trades" class="hide-etf">
 <thead><tr>
  <th class="sort" data-type="text">ETF</th><th class="sort" data-type="text">Date</th><th class="sort" data-type="text">Type</th><th class="sort" data-type="num">Quantity</th>
  <th class="sort" data-type="num">Price</th><th class="sort" data-type="num">Sum</th><th class="sort" data-type="num">Fee</th>
@@ -85,7 +103,8 @@
 <script src="/static/chart.umd.min.js"></script>
 <script>
 const D = {{ {'views': views, 'today': today, 'rangeDays': range_days, 'etf': etf,
-              'cards': cards, 'names': tabs|map(attribute='name')|list, 'isins': tabs|map(attribute='isin')|list}|tojson }};
+              'cards': cards, 'names': tabs|map(attribute='name')|list, 'isins': tabs|map(attribute='isin')|list,
+              'groups': tabs|map(attribute='group')|list, 'listed': tabs|map(attribute='listed')|list}|tojson }};
 const GREEN = '#4ade80', RED = '#f87171', ORANGE = '#fb923c';
 Chart.defaults.color = '#c3c8cf';
 Chart.defaults.borderColor = 'rgba(255,255,255,.08)';
@@ -223,6 +242,8 @@ function rangeStart(labels, key) {
 function build() {
   charts.forEach(c => c.destroy());
   const v = view(), all = isin === '';
+  // a watched, never-traded security has no value chart, trades or holding boxes: its price chart takes the row
+  for (const el of [chartsBox, cardsBox, tradesBox]) el.classList.toggle('watch', !!v.watch);
   document.getElementById('viTitle').textContent = 'Value and invested (EUR)' + (all ? '' : ' - ' + etfName());
   document.getElementById('plTitle').textContent = all ? 'Profit / Loss (EUR)' : etfName() + ' price (EUR)';
   const second = all
@@ -317,6 +338,11 @@ function applyRange() {
     ch.update();
   }
   const c = D.cards[isin][rangeKey];
+  if (view().watch) {   // a never-traded (watched) security: its price boxes only
+    for (const k of ['price', 'session', 'range']) document.getElementById('w-' + k).textContent = c[k];
+    for (const k of ['session', 'range']) document.getElementById('w-' + k).className = c[k][0] === '-' ? 'neg' : c[k][0] === '+' ? 'pos' : '';
+    return;
+  }
   for (const k of ['value', 'value_sub', 'invested', 'invested_sub', 'pnl', 'pnl_sub', 'xirr', 'session']) document.getElementById('c-' + k).textContent = c[k];
   document.getElementById('c-pnl').className = c.pnl_pos ? 'pos' : 'neg';
 }
@@ -402,10 +428,11 @@ heads.forEach((h, i) => h.onclick = () => {
   sortDir = i === sortCol && sortDir === 'asc' ? 'desc' : 'asc';
   sortCol = i; renderTable();
 });
-const chartsBox = document.querySelector('.charts');
-document.querySelectorAll('#etfs .btn').forEach(b => b.onclick = () => {
+const chartsBox = document.querySelector('.charts'), cardsBox = document.querySelector('.cards');
+const tradesBox = document.getElementById('tradesBox');
+document.querySelectorAll('#etfs .btn[data-isin]').forEach(b => b.onclick = () => {
   const want = isin = b.dataset.isin;
-  document.querySelectorAll('#etfs .btn').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('#etfs .btn[data-isin]').forEach(x => x.classList.toggle('active', x === b));
   renderTable(); syncUrl();
   if (view()) { chartsBox.classList.remove('loading'); build(); return; }
   // not in yet: the old charts stay, dimmed, until it is; a later click elsewhere wins
@@ -418,5 +445,64 @@ document.querySelectorAll('#etfs .btn').forEach(b => b.onclick = () => {
 // open on the ETF from the URL (the server sent its view along), else on the overview
 document.querySelector(`#etfs .btn[data-isin="${D.etf}"]`).click();
 preload();
+{% if fetch_enabled %}
+// the watchlist popup: search Scalable (debounced), add a hit, remove an entry; each change reloads the page
+const watchBtn = document.getElementById('watchEdit'), pop = document.getElementById('watchPop');
+const watchQ = document.getElementById('watchQ'), watchMsg = document.getElementById('watchMsg');
+const watchHits = document.getElementById('watchHits'), watchList = document.getElementById('watchList');
+const STATE_LABEL = {held: 'held', watched: 'on watchlist'};
+async function watchCall(url, opts = {}) {   // the reply's JSON, or an Error with its message
+  const r = await fetch(url, {...opts, headers: {'X-Requested-With': 'fetch', ...opts.headers}});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+function watchRow(text, action, label) {   // a list row: its text, then a button (action) or a muted label
+  const li = document.createElement('li'), span = document.createElement('span');
+  span.textContent = text; li.append(span);
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'btn'; b.textContent = label; b.onclick = action; li.append(b);
+  } else li.append(Object.assign(document.createElement('span'), {className: 'muted', textContent: label}));
+  return li;
+}
+const eur = p => p === null || p === undefined || p === '' ? 'n/a'
+  : Number(p).toLocaleString('en', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+async function watchChange(url, opts, then) {
+  watchMsg.textContent = '';
+  pop.querySelectorAll('li .btn').forEach(b => b.disabled = true);
+  try { await watchCall(url, opts); then(); location.reload(); }   // the URL keeps ?etf=
+  catch (err) { watchMsg.textContent = err.message; pop.querySelectorAll('li .btn').forEach(b => b.disabled = false); }
+}
+// after an add the server has started a fetch: the reloaded page waits for its data ("Fetch now" polling)
+const add = h => () => watchChange('/watchlist', {method: 'POST', headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({isin: h.isin, name: h.name, type: h.type || ''})},
+  () => sessionStorage.setItem('fetchPending', document.getElementById('fetchNow').dataset.last));
+const remove = i => () => watchChange('/watchlist/' + encodeURIComponent(i), {method: 'DELETE'}, () => {});
+// every Scalable entry can be removed, a held one too (it stays in Active)
+D.isins.forEach((i, k) => { if (D.groups[k] === 'watch' || D.listed[k]) watchList.append(watchRow(`${D.names[k]} · ${i}`, remove(i), 'Remove')); });
+if (!watchList.children.length) watchList.append(watchRow('nothing on the watchlist', null, ''));
+let searchTimer, searchSeq = 0;
+watchQ.oninput = () => {
+  clearTimeout(searchTimer);
+  const q = watchQ.value.trim(), seq = ++searchSeq;
+  watchMsg.textContent = '';
+  if (q.length < 2) { watchHits.replaceChildren(); return; }
+  searchTimer = setTimeout(async () => {
+    try {
+      const d = await watchCall('/watchlist/search?q=' + encodeURIComponent(q));
+      if (seq !== searchSeq) return;   // a later query is under way
+      watchHits.replaceChildren(...d.results.map(h => watchRow(
+        [h.name, h.type, h.isin, `${eur(h.price)} ${!h.currency || h.currency === 'EUR' ? '€' : h.currency}`].filter(Boolean).join(' · '),
+        h.state ? null : add(h), STATE_LABEL[h.state] || 'Add')));
+      if (!d.results.length) watchHits.append(watchRow('no hits', null, ''));
+    } catch (err) { if (seq === searchSeq) { watchHits.replaceChildren(); watchMsg.textContent = err.message; } }
+  }, 300);
+};
+const showPop = on => { pop.hidden = !on; watchBtn.classList.toggle('active', on); if (on) watchQ.focus(); };
+watchBtn.onclick = () => showPop(pop.hidden);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') showPop(false); });
+document.addEventListener('click', e => { if (!pop.hidden && !pop.contains(e.target) && e.target !== watchBtn) showPop(false); });
+{% endif %}
 </script>
 {% endif %}{% endblock %}

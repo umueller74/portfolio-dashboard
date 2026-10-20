@@ -90,3 +90,23 @@ def test_chart_timeframes_come_from_the_tool_schema():
                  "isin": {"type": "string"}, "timeframe": {"enum": ["one_day", "one_month", "max"]}}}}]
     assert n.chart_timeframes(tools) == ["one_day", "one_month", "max"]
     assert n.chart_timeframes([]) == list(n.KNOWN_TIMEFRAMES)            # schema not readable: what is known to work
+
+
+def test_parse_watchlist():
+    payload = {"portfolioId": "p", "items": [{"isin": "US0231351067", "name": "Amazon.com", "securityType": "STOCK",
+                                              "currentQuote": {"midPrice": 233.475, "currency": "EUR", "isOutdated": False}}]}
+    assert n.parse_watchlist(payload) == [{"isin": "US0231351067", "name": "Amazon.com", "type": "STOCK"}]
+    assert n.parse_watchlist(json.dumps(payload)) == n.parse_watchlist(payload)
+
+
+def test_parse_watchlist_tolerates_missing_name_and_type_and_skips_items_without_isin():
+    payload = {"items": [{"isin": "US0231351067", "name": None, "securityType": None},
+                         {"isin": "IE0000000001"}, {"name": "No ISIN", "securityType": "STOCK"}, {"isin": ""}]}
+    assert n.parse_watchlist(payload) == [{"isin": "US0231351067", "name": "US0231351067", "type": ""},
+                                          {"isin": "IE0000000001", "name": "IE0000000001", "type": ""}]
+
+
+def test_parse_quote_without_a_mid_price_is_none():
+    payload = {"security": {"isin": "IE0000000001", "quote": {"midPrice": None, "timestampUtc": "2026-10-09T20:59:56Z",
+                                                              "isOutdated": False}}}
+    assert n.parse_quote(payload) is None

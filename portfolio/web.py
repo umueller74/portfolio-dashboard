@@ -1,12 +1,13 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
-from portfolio import services
+from portfolio import services, watch
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -63,12 +64,21 @@ def marker_series(markers: dict, labels: list[date], values: list[float]) -> dic
 
 
 def etf_tabs(conn, ov) -> list[dict]:
-    """One entry per ETF ever traded (held ones first, by value, flagged active), with its trade rows for the table."""
+    """One entry per ETF ever traded or watched, in its group: "active" (held, by value), "watch" (not held but
+    on the watchlist, by name), "inactive" (the other traded ones, by name). Each carries its trade rows for
+    the table (none for a never-traded one), whether it was ever traded, and whether it is on the Scalable
+    watchlist (`listed`, so the popup can remove a held one too)."""
     held = [h.isin for h in ov.holdings]
-    names = {t.isin: t.name for t in services.load_trades(conn)}
-    others = sorted((i for i in names if i not in held), key=lambda i: names[i])
-    return [{"isin": i, "name": names[i], "active": i in held, "rows": services.isin_detail(conn, i).rows}
-            for i in held + others]
+    traded = {t.isin: t.name for t in services.load_trades(conn)}
+    on = watch.watched(conn)
+    listed = {r[0] for r in conn.execute("select isin from watchlist")}
+    names = {**{i: e["name"] for i, e in on.items()}, **traded}   # a traded ETF keeps its trades' name
+    by_name = lambda isins: sorted(isins, key=lambda i: names[i])
+    groups = [("active", held), ("watch", by_name(i for i in on if i not in held)),
+              ("inactive", by_name(i for i in traded if i not in held and i not in on))]
+    return [{"isin": i, "name": names[i], "group": g, "active": g == "active", "traded": i in traded,
+             "listed": i in listed, "rows": services.isin_detail(conn, i).rows if i in traded else []}
+            for g, isins in groups for i in isins]
 
 
 def _card_texts_for(conn, ov, today: date, isin: str | None) -> dict:
@@ -96,18 +106,49 @@ def _held(ov, isin: str, attr: str):
     return getattr(h, attr) if h else Decimal(0)
 
 
+def _change(old: Decimal, new: Decimal) -> str:
+    return f"{_signed(new - old)} € ({_signed((new - old) / old * 100 if old else None)} %)"
+
+
+def _watch_cards(conn, today: date, isin: str) -> dict:
+    """A never-traded security's info boxes per range: its price (the quote, else the last close), the change
+    since the session before and the change from the range's first close (the one before the last for 1d) to
+    that price."""
+    rows = services._closes(conn).get(isin, [])
+    quote = conn.execute("select price from quotes where isin=?", (isin,)).fetchone()
+    price = Decimal(quote["price"]) if quote else rows[-1][1] if rows else None
+    session = _change(rows[-2][1], rows[-1][1]) if len(rows) >= 2 else "n/a"
+    days = [d for d, _ in rows]
+    out = {}
+    for key in RANGES:
+        if key == "1d":
+            start = rows[-2][1] if len(rows) >= 2 else None
+        elif rows:
+            i = services.range_start(days, key, today)
+            start = rows[0 if i is None else min(i, len(rows) - 1)][1]
+        else:
+            start = None
+        out[key] = {"price": "n/a" if price is None else f"{_eur(price)} €", "session": session,
+                    "range": "n/a" if start is None or price is None else _change(start, price)}
+    return out
+
+
 def card_texts(conn, ov, today: date, isins: list[str]) -> dict:
     """The info boxes' texts per view ("" = whole portfolio, else an ISIN) and range, so the buttons can
-    swap them without a reload."""
-    if ov.error or not ov.holdings:
-        return {}
-    return {i: _card_texts_for(conn, ov, today, i or None) for i in ["", *isins]}
+    swap them without a reload. A never-traded (watched) ISIN gets its price boxes, even without holdings."""
+    traded = {t.isin for t in services.load_trades(conn)}
+    out = {} if ov.error or not ov.holdings else {
+        i: _card_texts_for(conn, ov, today, i or None) for i in ["", *isins] if not i or i in traded}
+    out.update({i: _watch_cards(conn, today, i) for i in isins if i not in traded})
+    return out
 
 
 def view_data(conn, isin: str | None) -> dict:
     """Chart data for the whole portfolio (isin None) or one ETF. `second` feeds the right-hand chart:
     profit/loss for the portfolio, the ETF's own price (plus `ma20`/`ma50`) for a single ETF. That chart has
-    its own days (`plabels`, `pmarkers`): an ETF's price goes back to its oldest close, before the first trade."""
+    its own days (`plabels`, `pmarkers`): an ETF's price goes back to its oldest close, before the first trade,
+    and before that to the last stored price of each earlier day (`services.coarse_closes`; no averages or
+    markers there). A never-traded (watched) ETF has no value chart and is flagged `watch`."""
     series = services.value_series(conn, isin)   # the full history; the range buttons slice it in the browser
     days = [p.day for p in series]
     values = [p.value for p in series]
@@ -117,12 +158,18 @@ def view_data(conn, isin: str | None) -> dict:
         out.update(plabels=out["labels"], second=[round(p.value - p.invested, 2) for p in series],
                    pmarkers=out["markers"])
         return out
+    if not any(t.isin == isin for t in services.load_trades(conn)):
+        out["watch"] = True
     closes = services._closes(conn).get(isin, [])
+    coarse = services.coarse_closes(conn, isin)
     pdays, prices = [d for d, _ in closes], [float(p) for _, p in closes]
-    out.update(plabels=[d.isoformat() for d in pdays], second=prices,
-               pmarkers=marker_series(services.trade_markers(conn, pdays, isin), pdays, prices))
+    pad = [None] * len(coarse)
+    pmarkers = marker_series(services.trade_markers(conn, pdays, isin), pdays, prices)
+    pmarkers = {k: ([[] for _ in coarse] if k == "tooltips" else pad) + v for k, v in pmarkers.items()}
+    out.update(plabels=[d.isoformat() for d, _ in coarse] + [d.isoformat() for d in pdays],
+               second=[float(p) for _, p in coarse] + prices, pmarkers=pmarkers)
     # 20- and 50-day averages of the ETF's price, over its whole history (range-independent)
-    out.update({f"ma{n}": ma for n, ma in services.moving_averages(conn, isin, pdays).items()})
+    out.update({f"ma{n}": pad + ma for n, ma in services.moving_averages(conn, isin, pdays).items()})
     out.update(tick_data(conn, isin))
     return out
 
@@ -171,7 +218,8 @@ async def portfolio_page(request: Request, range: str = "1y", etf: str = ""):
 def etf_view(request: Request, isin: str):
     """One ETF's chart data and info box texts, as the portfolio page holds them in `D.views` and `D.cards`."""
     conn = request.app.state.conn
-    if not conn.execute("select 1 from trades where isin=?", (isin,)).fetchone():
+    traded = conn.execute("select 1 from trades where isin=?", (isin,)).fetchone()
+    if not traded and isin not in watch.watched(conn):
         return JSONResponse({"error": "unknown ETF"}, status_code=404)
     today = date.today()
     ov = services.overview(conn, today)
@@ -218,6 +266,80 @@ def fetch_state(request: Request):
     except OSError as e:
         out["error"] = f"fetcher unreachable: {e}"
     return out
+
+
+def _guard(request: Request, x_requested_with: str):
+    """The error response for a watchlist call that is not allowed (no trigger, no script header), else None."""
+    if request.app.state.trigger is None:
+        return JSONResponse({"error": "no fetch trigger configured"}, status_code=404)
+    if x_requested_with != "fetch":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+
+def _watchlist_call(request: Request, method: str, path: str, body: dict | None = None):
+    """(listener's 200 reply, None), or (None, the error response) when the listener fails or is unreachable."""
+    try:
+        code, reply = request.app.state.trigger(method, path, body)
+    except OSError as e:
+        return None, JSONResponse({"error": f"fetcher unreachable: {e}"}, status_code=502)
+    if code != 200:
+        return None, JSONResponse(reply, status_code=code)
+    return reply, None
+
+
+@router.get("/watchlist/search")
+def watchlist_search(request: Request, q: str = "", x_requested_with: str = Header(default="")):
+    """The Scalable search for the popup; each hit is marked as held, already watched, or neither."""
+    if err := _guard(request, x_requested_with):
+        return err
+    reply, err = _watchlist_call(request, "GET", f"/search?q={quote(q, safe='')}")
+    if err:
+        return err
+    conn = request.app.state.conn
+    held = {h.isin for h in services.overview(conn, date.today()).holdings}
+    on = watch.watched(conn)
+    for hit in reply.get("results", []):
+        hit["state"] = "held" if hit["isin"] in held else "watched" if hit["isin"] in on else ""
+    return reply
+
+
+@router.post("/watchlist")
+async def watchlist_add(request: Request, x_requested_with: str = Header(default="")):
+    if err := _guard(request, x_requested_with):
+        return err
+    try:
+        entry = await request.json()
+        isin, name, kind = entry["isin"], entry["name"], entry.get("type", "")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return JSONResponse({"error": "isin and name needed"}, status_code=400)
+    if not all(isinstance(v, str) for v in (isin, name, kind)) or not isin or not name:
+        return JSONResponse({"error": "isin and name must be non-empty strings"}, status_code=400)
+    _, err = _watchlist_call(request, "POST", "/watchlist", {"isin": isin, "action": "add"})
+    if err:
+        return err
+    conn = request.app.state.conn
+    watch.remember(conn, isin, name, kind)
+    watch.manual(conn, isin, True)
+    try:
+        request.app.state.trigger("POST")   # while a fetch runs, the listener queues one more that sees the entry
+    except OSError:
+        pass                                # added on Scalable; the next scheduled fetch picks it up
+    return {"status": "ok"}
+
+
+@router.delete("/watchlist/{isin}")
+def watchlist_remove(request: Request, isin: str, x_requested_with: str = Header(default="")):
+    if err := _guard(request, x_requested_with):
+        return err
+    conn = request.app.state.conn
+    auto = conn.execute("select state from watch_auto where isin=?", (isin,)).fetchone()
+    listed = conn.execute("select 1 from watchlist where isin=?", (isin,)).fetchone()
+    if not (auto and auto[0] == "pending_add" and not listed):   # an auto-add not sent yet: just cancel it
+        _, err = _watchlist_call(request, "POST", "/watchlist", {"isin": isin, "action": "remove"})
+        if err:
+            return err
+    watch.manual(conn, isin, False)
+    return {"status": "ok"}
 
 
 @router.get("/metrics", response_class=PlainTextResponse)

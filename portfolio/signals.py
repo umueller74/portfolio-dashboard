@@ -1,8 +1,9 @@
-"""Moving-average crossover alerts for the ETFs currently held: a BUY when the 20-day average of the closes
-rises above the 50-day one, a SELL when it falls below. A fall below while the close is still above the
-200-day average is a DIP instead: a pullback inside an uptrend, which backtests showed to be a buying chance
-rather than an exit. With fewer than 200 closes it stays a SELL. The last side per ETF is kept in `signals`;
-an ETF seen for the first time (or bought again after selling out) is recorded without an alert."""
+"""Moving-average crossover alerts for the ETFs currently held and the securities on the watchlist: a BUY
+when the 20-day average of the closes rises above the 50-day one, a SELL when it falls below. A fall below
+while the close is still above the 200-day average is a DIP instead: a pullback inside an uptrend, which
+backtests showed to be a buying chance rather than an exit. With fewer than 200 closes it stays a SELL. The
+last side per ETF is kept in `signals`; an ETF seen for the first time (or bought again after selling out, or
+put on the watchlist again) is recorded without an alert."""
 import json
 import logging
 import urllib.request
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Callable
 
-from portfolio import services
+from portfolio import services, watch
 
 log = logging.getLogger("portfolio.signals")
 SESSION_END_HOUR = 22      # gettex closes 22:00 Berlin; until then today's close is still moving
@@ -51,16 +52,18 @@ def _last_session(conn, isin: str, now: datetime) -> tuple[date, float] | None:
 
 
 def check(conn, now: datetime, send: Sender | None) -> list[Signal]:
-    """Compare each held ETF's averages on its last completed session with the stored side and alert on a
-    change. Without `send` changes are only recorded. A failed send leaves the old side, so the next check
+    """Compare each held or watched ETF's averages on its last completed session with the stored side and alert
+    on a change. Without `send` changes are only recorded. A failed send leaves the old side, so the next check
     retries. Returns the signals that were sent."""
     ov = services.overview(conn, services._day(now))
     if ov.error:
         return []
     names = {h.isin: h.name for h in ov.holdings}
+    for isin, entry in watch.watched(conn).items():
+        names.setdefault(isin, entry["name"])
     stored = {r["isin"]: r["state"] for r in conn.execute("select isin, state from signals")}
     with conn:
-        for isin in stored.keys() - names.keys():          # sold out: start silently if bought again
+        for isin in stored.keys() - names.keys():          # sold out or unwatched: start silently if back
             conn.execute("delete from signals where isin=?", (isin,))
     sent: list[Signal] = []
     for isin, name in names.items():
