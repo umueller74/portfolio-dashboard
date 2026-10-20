@@ -65,7 +65,7 @@
  <th class="sort" data-type="num">P/L %</th><th class="sort" data-type="num">Realized</th></tr></thead>
 <tbody>
 {% for t in tabs %}{% for r in t.rows|sort(attribute='trade.executed_at', reverse=true) %}
-<tr data-isin="{{ t.isin }}">
+<tr data-isin="{{ t.isin }}" data-day="{{ r.trade.executed_at|berlin_date }}">
  <td data-v="{{ t.name }}">{{ t.name }}</td>
  <td data-v="{{ r.trade.executed_at.isoformat() }}">{{ r.trade.executed_at|berlin_date }}</td>
  <td data-v="{{ r.trade.side }}">{{ r.trade.side }}{% if r.trade.kind == 'SAVINGS_PLAN' %} <span class="muted">(plan)</span>{% endif %}</td>
@@ -293,7 +293,7 @@ const syncUrl = () => history.replaceState(null, '', '?range=' + rangeKey + (isi
 
 function applyRange() {
   document.querySelectorAll('.btn[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === rangeKey));
-  syncUrl();
+  syncUrl(); renderTable();   // the table shows the range's trades only
   if (!view()) return;   // the ETF is still loading: build() applies the range when it is in
   for (const ch of charts) {
     const v = ch.variants.ticks && TICK_RANGES.includes(rangeKey) ? ch.variants.ticks : ch.variants.daily;
@@ -376,7 +376,15 @@ pnlCanvas.addEventListener('dblclick', () => { if (zoomChart()) applyRange(); })
 // range buttons: the bar above the charts, plus a copy in the maximized chart's header
 document.querySelectorAll('.btn[data-range]').forEach(b => b.onclick = () => { rangeKey = b.dataset.range; applyRange(); });
 
-// trades table: one ETF at a time, every column sortable (default: date, newest first)
+// the first (Berlin) day whose trades the table shows for a range: 1d is the last session, ytd the year
+function tradesFrom(key) {
+  if (key === '1d') return D.views[''].labels.at(-1) || D.today;
+  if (key === 'ytd') return D.today.slice(0, 4) + '-01-01';
+  if (!D.rangeDays[key]) return '';
+  const d = new Date(D.today + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - D.rangeDays[key]);
+  return d.toISOString().slice(0, 10);
+}
+// trades table: one ETF at a time and the range's trades only, every column sortable (default: date, newest first)
 const tbody = document.querySelector('#trades tbody');
 const heads = [...document.querySelectorAll('#trades th')];
 let sortCol = 1, sortDir = 'desc';
@@ -384,9 +392,9 @@ function renderTable() {
   const type = heads[sortCol].dataset.type, sign = sortDir === 'asc' ? 1 : -1;
   const key = tr => { const v = tr.children[sortCol].dataset.v;
     return type === 'num' ? (v === '' ? -Infinity : parseFloat(v)) : v; };
-  const rows = [...tbody.children];
+  const rows = [...tbody.children], from = tradesFrom(rangeKey);
   rows.sort((a, b) => { const x = key(a), y = key(b); return sign * (x < y ? -1 : x > y ? 1 : 0); });
-  rows.forEach(tr => { tr.hidden = isin !== '' && tr.dataset.isin !== isin; tbody.appendChild(tr); });
+  rows.forEach(tr => { tr.hidden = isin !== '' && tr.dataset.isin !== isin || tr.dataset.day < from; tbody.appendChild(tr); });
   document.getElementById('trades').classList.toggle('hide-etf', isin !== '');
   heads.forEach((h, i) => { if (i === sortCol) h.dataset.dir = sortDir; else delete h.dataset.dir; });
 }

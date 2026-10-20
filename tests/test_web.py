@@ -280,3 +280,11 @@ def test_trigger_client_calls_the_listener_with_the_token():
     assert call("POST") == (409, {"status": "running"})
     assert call("GET") == (200, {"running": False, "last_exit": 0})
     assert seen == [("POST", "http://raspi2:8770/fetch", "Bearer tok"), ("GET", "http://raspi2:8770/fetch", "Bearer tok")]
+
+
+def test_trade_rows_carry_their_berlin_day_for_the_range_filter(client):
+    # 23:30 UTC is already the next day in Berlin: the range buttons filter on the day the table shows
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T23:30:00Z")])
+    html = client.get("/").text
+    assert f'<tr data-isin="{ISIN}" data-day="2026-01-06">' in html
+    assert "tradesFrom(rangeKey)" in html
