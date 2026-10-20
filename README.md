@@ -36,3 +36,17 @@ a "Fetch now" button. It posts to `/fetch` (behind the page's basicAuth, not `/a
 the ingest token, and the page polls `GET /fetch` until a newer ingest has arrived, then reloads. The listener,
 `fetcher/trigger.py` (standard library, env `INGEST_TOKEN`, `FETCH_CMD`, `TRIGGER_PORT` default 8770), runs at most
 one `FETCH_CMD` at a time and reports its exit code.
+
+Watchlist: the "Watchlist" group on the portfolio page mirrors the Scalable watchlist both ways. Each fetch first
+applies the app's pending adds and removes (`/api/watchlist/actions`, read by `fetcher/run.py`), then reads the list
+with `list_watchlist_items`, sends it as `watchlist` in the ingest body and fetches prices for the watched ISINs
+too. The ✎ popup searches Scalable's securities and adds or removes entries (`/watchlist/search`, `POST /watchlist`,
+`DELETE /watchlist/{isin}`, through the listener's `/search` and `/watchlist`), so it needs `FETCH_TRIGGER_URL`;
+adding starts a fetch. A held ETF always shows as Active, a watched one that was never traded gets a price-only
+view, and watched entries get crossover alerts like held ones. Their history comes from justETF for ETFs, for other
+securities from Scalable's coarser points before the first close (chart only).
+
+The dashboard also edits the list itself (`portfolio/watch.py`): after a position is sold out (only sell-outs after
+the first fetch that read the list count) its ISIN is added to the Scalable watchlist once, and removed again 3
+calendar months after the sell-out if the dashboard added it. An entry that was already on the list, or that you
+added or removed in the popup, is yours and never removed automatically; buying the ISIN again pauses the clock.
