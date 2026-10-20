@@ -40,6 +40,10 @@ def parse_transactions(payload) -> tuple[list[dict], str | None]:
     return trades, data["page"]["nextCursor"]
 
 
+def parse_watchlist(payload) -> list[dict]:
+    return [{"isin": i["isin"], "name": i["name"], "type": i["securityType"]} for i in unwrap(payload)["items"]]
+
+
 def fee_from_details(payload) -> Decimal:
     trade = unwrap(payload)["transaction"]["securityTrade"]
     total = trade.get("totalAmount")

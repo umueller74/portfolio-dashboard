@@ -14,9 +14,12 @@ log = logging.getLogger("fetcher")
 MAX_PAGES = 50
 
 
-async def collect(call, state_dir, timeframes=normalize.KNOWN_TIMEFRAMES) -> dict:
-    """Trades (with fees and prices from the cached details), daily closes, quotes, and as `ticks` every
-    chart point of every timeframe. year_to_date is always fetched and must succeed: it feeds the closes."""
+async def collect(call, state_dir, timeframes=normalize.KNOWN_TIMEFRAMES, actions=None) -> dict:
+    """Trades (with fees and prices from the cached details), then the pending watchlist `actions`
+    ({"add": [...], "remove": [...]}, each applied on its own and only logged on failure), then the Scalable
+    watchlist as `watchlist` (omitted when it cannot be read, so the app keeps its old list). Daily closes,
+    quotes, and as `ticks` every chart point of every timeframe, for traded and watched ISINs alike.
+    year_to_date is always fetched and must succeed: it feeds the closes."""
     state = Path(state_dir)
     state.mkdir(parents=True, exist_ok=True)
     cache_path = state / "details.json"
@@ -43,8 +46,21 @@ async def collect(call, state_dir, timeframes=normalize.KNOWN_TIMEFRAMES) -> dic
             t["price"] = cache[t["id"]]["price"]
     cache_path.write_text(json.dumps(cache))
 
+    for tool, key in (("add_watchlist_item", "add"), ("remove_watchlist_item", "remove")):
+        for isin in (actions or {}).get(key, []):
+            try:
+                await call(tool, {"isin": isin})
+            except Exception as e:   # a failed action must not fail the run; the app keeps it pending
+                log.warning("%s %s failed: %s", tool, isin, e)
+
+    watchlist = None
+    try:
+        watchlist = normalize.parse_watchlist(await call("list_watchlist_items", {}))
+    except Exception as e:
+        log.warning("reading the watchlist failed, the app keeps its old one: %s", e)
+
     closes, quotes, ticks = [], [], {}
-    for isin in sorted({t["isin"] for t in trades}):
+    for isin in sorted({t["isin"] for t in trades} | {w["isin"] for w in watchlist or []}):
         chart = await call("get_security_chart", {"isin": isin, "timeframe": "year_to_date"})
         closes += [{"isin": isin, **c} for c in normalize.parse_chart(chart)]
         charts = [chart]
@@ -58,8 +74,11 @@ async def collect(call, state_dir, timeframes=normalize.KNOWN_TIMEFRAMES) -> dic
         for c in charts:
             ticks.update({(t["isin"], t["at"]): t for t in normalize.parse_ticks(c, isin)})
         quotes.append(normalize.parse_quote(await call("get_security_quote", {"isin": isin})))
-    return {"fetched_at": datetime.now(timezone.utc).isoformat(), "trades": trades, "closes": closes, "quotes": quotes,
+    body = {"fetched_at": datetime.now(timezone.utc).isoformat(), "trades": trades, "closes": closes, "quotes": quotes,
             "ticks": sorted(ticks.values(), key=lambda t: (t["isin"], t["at"]))}
+    if watchlist is not None:
+        body["watchlist"] = watchlist
+    return body
 
 
 async def chart_timeframes(session) -> list[str]:
@@ -84,16 +103,30 @@ def push(body: dict, ingest_url: str, ingest_token: str, opener=urllib.request.u
         resp.read()
 
 
+def pending_actions(ingest_url: str, token: str, opener=urllib.request.urlopen) -> dict | None:
+    """The watchlist adds/removes the app wants applied, from the ingest URL's sibling `/api/watchlist/actions`.
+    Never fails the run: None on any error."""
+    try:
+        url = ingest_url.removesuffix("/api/ingest") + "/api/watchlist/actions"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with opener(req, timeout=60) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        log.warning("reading the watchlist actions failed: %s", e)
+        return None
+
+
 async def _main() -> None:
     from fetcher.auth_hermes import bootstrap
 
     bootstrap()  # must precede any `mcp` import
     from fetcher.session import open_call
 
+    actions = pending_actions(os.environ["INGEST_URL"], os.environ["INGEST_TOKEN"])
     async with open_call(os.environ.get("MCP_URL", "https://mcp.scalable.capital/mcp")) as call:
         timeframes = await chart_timeframes(call.session)
         log.info("chart timeframes: %s", ", ".join(timeframes))
-        body = await collect(call, os.environ["STATE_DIR"], timeframes)
+        body = await collect(call, os.environ["STATE_DIR"], timeframes, actions)
     push(body, os.environ["INGEST_URL"], os.environ["INGEST_TOKEN"])
     log.info("pushed %d trades, %d closes, %d quotes, %d ticks",
              len(body["trades"]), len(body["closes"]), len(body["quotes"]), len(body["ticks"]))

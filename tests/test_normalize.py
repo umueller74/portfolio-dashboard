@@ -90,3 +90,10 @@ def test_chart_timeframes_come_from_the_tool_schema():
                  "isin": {"type": "string"}, "timeframe": {"enum": ["one_day", "one_month", "max"]}}}}]
     assert n.chart_timeframes(tools) == ["one_day", "one_month", "max"]
     assert n.chart_timeframes([]) == list(n.KNOWN_TIMEFRAMES)            # schema not readable: what is known to work
+
+
+def test_parse_watchlist():
+    payload = {"portfolioId": "p", "items": [{"isin": "US0231351067", "name": "Amazon.com", "securityType": "STOCK",
+                                              "currentQuote": {"midPrice": 233.475, "currency": "EUR", "isOutdated": False}}]}
+    assert n.parse_watchlist(payload) == [{"isin": "US0231351067", "name": "Amazon.com", "type": "STOCK"}]
+    assert n.parse_watchlist(json.dumps(payload)) == n.parse_watchlist(payload)
