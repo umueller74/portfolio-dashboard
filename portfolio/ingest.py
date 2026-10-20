@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from portfolio import history, signals
+from portfolio import history, services, signals, watch
 
 router = APIRouter(prefix="/api")
 
@@ -46,12 +46,19 @@ class TickIn(BaseModel):
     price: Decimal
 
 
+class WatchIn(BaseModel):
+    isin: str
+    name: str
+    type: str
+
+
 class IngestIn(BaseModel):
     fetched_at: datetime
     trades: list[TradeIn] = []
     closes: list[CloseIn] = []
     quotes: list[QuoteIn] = []
     ticks: list[TickIn] = []          # every chart point the fetcher saw
+    watchlist: list[WatchIn] | None = None  # None: the fetcher could not read it, keep the stored one
 
 
 def _utc(dt: datetime) -> str:
@@ -67,6 +74,7 @@ def require_token(request: Request, authorization: str = Header(default="")):
 @router.post("/ingest", dependencies=[Depends(require_token)])
 async def ingest(body: IngestIn, request: Request, tasks: BackgroundTasks):
     conn = request.app.state.conn
+    day = services._day(body.fetched_at)  # Berlin day of the fetch: `watch_since` and the 3-month clock
     with conn:
         for t in body.trades:
             conn.execute(
@@ -100,11 +108,23 @@ async def ingest(body: IngestIn, request: Request, tasks: BackgroundTasks):
             " on conflict(key) do update set value=excluded.value",
             (body.fetched_at.isoformat(),),
         )
+        if body.watchlist is not None:
+            conn.execute("delete from watchlist")
+            conn.executemany("insert or replace into watchlist(isin,name,type) values(?,?,?)",
+                             [(w.isin, w.name, w.type) for w in body.watchlist])
+            conn.execute("insert or ignore into meta(key,value) values('watch_since',?)", (day.isoformat(),))
+    if body.watchlist is not None:
+        watch.reconcile(conn, day)
     # after the response, in the threadpool so slow calls never block requests: first older closes for ETFs
     # not backfilled yet (so the 200-day average sees them), then crossover alerts
     tasks.add_task(history.backfill, conn, request.app.state.history)
     tasks.add_task(signals.check, conn, datetime.now(timezone.utc), request.app.state.notify)
     return {"trades": len(body.trades), "closes": len(body.closes), "quotes": len(body.quotes)}
+
+
+@router.get("/watchlist/actions", dependencies=[Depends(require_token)])
+async def watchlist_actions(request: Request):
+    return watch.actions(request.app.state.conn)
 
 
 @router.get("/backup", dependencies=[Depends(require_token)])

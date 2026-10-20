@@ -28,6 +28,11 @@ create table if not exists signals(
 );
 create table if not exists ticks(isin text not null, at text not null, price text not null, primary key (isin, at));
 create table if not exists backfills(isin text primary key, fetched_at text not null, points integer not null);
+create table if not exists watchlist(isin text primary key, name text not null, type text not null);
+create table if not exists watch_auto(
+  isin text primary key, sold_on text not null,
+  state text not null check (state in ('pending_add','added','pending_remove','done'))
+);
 """
 
 
