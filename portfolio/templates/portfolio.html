@@ -104,7 +104,7 @@
 <script>
 const D = {{ {'views': views, 'today': today, 'rangeDays': range_days, 'etf': etf,
               'cards': cards, 'names': tabs|map(attribute='name')|list, 'isins': tabs|map(attribute='isin')|list,
-              'groups': tabs|map(attribute='group')|list}|tojson }};
+              'groups': tabs|map(attribute='group')|list, 'listed': tabs|map(attribute='listed')|list}|tojson }};
 const GREEN = '#4ade80', RED = '#f87171', ORANGE = '#fb923c';
 Chart.defaults.color = '#c3c8cf';
 Chart.defaults.borderColor = 'rgba(255,255,255,.08)';
@@ -479,7 +479,8 @@ const add = h => () => watchChange('/watchlist', {method: 'POST', headers: {'Con
   body: JSON.stringify({isin: h.isin, name: h.name, type: h.type || ''})},
   () => sessionStorage.setItem('fetchPending', document.getElementById('fetchNow').dataset.last));
 const remove = i => () => watchChange('/watchlist/' + encodeURIComponent(i), {method: 'DELETE'}, () => {});
-D.isins.forEach((i, k) => { if (D.groups[k] === 'watch') watchList.append(watchRow(`${D.names[k]} · ${i}`, remove(i), 'Remove')); });
+// every Scalable entry can be removed, a held one too (it stays in Active)
+D.isins.forEach((i, k) => { if (D.groups[k] === 'watch' || D.listed[k]) watchList.append(watchRow(`${D.names[k]} · ${i}`, remove(i), 'Remove')); });
 if (!watchList.children.length) watchList.append(watchRow('nothing on the watchlist', null, ''));
 let searchTimer, searchSeq = 0;
 watchQ.oninput = () => {

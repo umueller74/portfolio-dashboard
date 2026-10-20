@@ -203,3 +203,14 @@ def test_one_day_range_is_the_change_over_the_last_session(client):
     conn = client.app.state.conn
     st = services.range_stats(conn, services.overview(conn, today), "1d", today)
     assert st.value_delta == D(600) - D(550) and st.pnl_delta == D(50)
+
+
+def test_portfolio_days_come_from_traded_isins_only(client):
+    # a watched, never-traded security has closes on days the traded ETF has none: they add no portfolio days
+    seed(client, [trade("a", "BUY", "2", "100", "2026-01-05T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": "2026-01-05", "price": "100"},
+                 {"isin": ISIN, "day": "2026-01-07", "price": "110"},
+                 {"isin": "US67066G1040", "day": "2026-01-06", "price": "50"},
+                 {"isin": "US67066G1040", "day": "2026-01-08", "price": "51"}])
+    conn = client.app.state.conn
+    assert [p.day.isoformat() for p in services.value_series(conn, None)] == ["2026-01-05", "2026-01-07"]

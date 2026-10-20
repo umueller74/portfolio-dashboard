@@ -164,13 +164,14 @@ class SeriesPoint:
 
 
 def value_series(conn, isin: str | None = None) -> list[SeriesPoint]:
-    """Daily value and invested amount, for the whole portfolio or (with `isin`) for one ETF."""
+    """Daily value and invested amount, for the whole portfolio or (with `isin`) for one ETF. The days are those
+    with a close of a traded ISIN (a watched-only security's closes add none)."""
     trades = [t for t in load_trades(conn) if isin is None or t.isin == isin]
     if not trades:
         return []
     closes = _closes(conn)
     first = _day(trades[0].executed_at)
-    sources = closes.values() if isin is None else [closes.get(isin, [])]
+    sources = [closes.get(i, []) for i in {t.isin for t in trades}] if isin is None else [closes.get(isin, [])]
     days = sorted({d for rows in sources for d, _ in rows if d >= first})
     # the trades up to a day are a prefix of these; holdings only change on a trade day, so replay only then
     trades.sort(key=lambda t: (_day(t.executed_at), t.executed_at, t.id))

@@ -250,9 +250,14 @@ def test_fetch_starts_the_fetcher_and_reports_its_state(tmp_path):
     assert trig.calls == ["POST", "GET"]
 
 
-def test_fetch_already_running_is_passed_on(tmp_path):
-    r = trigger_client(tmp_path, FakeTrigger(post=(409, {"status": "running"}))).post("/fetch", headers=XHR)
-    assert r.status_code == 409 and r.json() == {"status": "running"}
+def test_fetch_queued_behind_a_running_one_is_passed_on(tmp_path):
+    r = trigger_client(tmp_path, FakeTrigger(post=(202, {"status": "queued"}))).post("/fetch", headers=XHR)
+    assert r.status_code == 202 and r.json() == {"status": "queued"}
+
+
+def test_fetch_now_script_waits_on_a_queued_fetch(tmp_path):
+    html = trigger_client(tmp_path, FakeTrigger()).get("/").text
+    assert "if (r.status !== 202) return fetchDone(" in html   # "started" and "queued" are both 202
 
 
 def test_fetch_needs_the_script_header(tmp_path):
@@ -288,6 +293,26 @@ def test_trigger_client_calls_the_listener_with_the_token():
     assert call("POST") == (409, {"status": "running"})
     assert call("GET") == (200, {"running": False, "last_exit": 0})
     assert seen == [("POST", "http://raspi2:8770/fetch", "Bearer tok"), ("GET", "http://raspi2:8770/fetch", "Bearer tok")]
+
+
+def test_trigger_client_waits_longer_for_scalable_calls():
+    import io
+    from portfolio.refresh import trigger_client as make
+    seen = []
+
+    class Resp(io.BytesIO):
+        status = 200
+
+    def opener(req, timeout):
+        seen.append((req.full_url.removeprefix("http://raspi2:8770"), timeout))
+        return Resp(b"{}")
+
+    call = make("http://raspi2:8770/fetch", "tok", opener)
+    call("POST")
+    call("GET")
+    call("GET", "/search?q=x")
+    call("POST", "/watchlist", {"isin": "I", "action": "add"})
+    assert seen == [("/fetch", 10), ("/fetch", 10), ("/search?q=x", 30), ("/watchlist", 30)]
 
 
 def test_trigger_client_paths():
@@ -350,11 +375,37 @@ def test_add_stores_entry_and_starts_fetch(tmp_path):
 
 
 def test_add_with_a_running_fetch_is_fine(tmp_path):
-    trig = FakeTrigger(post=(409, {"status": "running"}))
+    trig = FakeTrigger(post=(202, {"status": "queued"}))
     c = wl_client(tmp_path, trig)
     r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": ""}, headers=XHR)
     assert r.status_code == 200 and r.json() == {"status": "ok"}
-    assert trig.requests[-1] == ("POST", "/fetch", None)   # attempted; its 409 is fine
+    assert trig.requests[-1] == ("POST", "/fetch", None)   # queued behind the running one
+
+
+def test_remove_of_an_unsent_auto_add_skips_the_listener(tmp_path):
+    from portfolio import watch
+    trig = FakeTrigger(watchlist=OSError("must not be called"))
+    c = wl_client(tmp_path, trig)
+    conn = c.app.state.conn
+    with conn:
+        conn.execute("insert into watch_auto(isin,sold_on,state) values('IE2','2026-10-05','pending_add')")
+    r = c.delete("/watchlist/IE2", headers=XHR)
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+    assert trig.requests == []
+    assert conn.execute("select state from watch_auto where isin='IE2'").fetchone()[0] == "done"
+    assert "IE2" not in watch.watched(conn) and watch.actions(conn) == {"add": [], "remove": []}
+
+
+def test_remove_of_a_listed_pending_add_calls_the_listener(tmp_path):
+    from portfolio import watch
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    conn = c.app.state.conn
+    watch.remember(conn, "IE2", "Other", "ETF")
+    with conn:
+        conn.execute("insert into watch_auto(isin,sold_on,state) values('IE2','2026-10-05','pending_add')")
+    assert c.delete("/watchlist/IE2", headers=XHR).status_code == 200
+    assert trig.requests == [("POST", "/watchlist", {"isin": "IE2", "action": "remove"})]
 
 
 def test_add_turns_auto_row_manual(tmp_path):
@@ -460,9 +511,9 @@ def test_tabs_groups(client):
     watch.remember(conn, W3, "Zeta Corp", "STOCK")
     watch.remember(conn, ISIN, "Held and listed", "ETF")
     tabs = etf_tabs(conn, services.overview(conn, date(2026, 10, 20)))
-    got = [(t["isin"], t["group"], t["active"], t["traded"], len(t["rows"])) for t in tabs]
-    assert got == [(ISIN, "active", True, True, 1), (W1, "watch", False, True, 2),
-                   (W3, "watch", False, False, 0), (W2, "inactive", False, True, 2)]
+    got = [(t["isin"], t["group"], t["active"], t["traded"], len(t["rows"]), t["listed"]) for t in tabs]
+    assert got == [(ISIN, "active", True, True, 1, True), (W1, "watch", False, True, 2, False),
+                   (W3, "watch", False, False, 0, True), (W2, "inactive", False, True, 2, False)]
     assert tabs[2]["name"] == "Zeta Corp"
 
 
@@ -546,6 +597,7 @@ def test_edit_button_only_with_trigger(client, tmp_path):
     seed(c, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
     html = c.get("/").text
     assert 'id="watchEdit"' in html and 'id="watchPop"' in html
+    assert "D.groups[k] === 'watch' || D.listed[k]" in html   # the remove list: held Scalable entries too
 
 
 def test_watchlist_entries_in_page_data(client):
@@ -553,5 +605,8 @@ def test_watchlist_entries_in_page_data(client):
                   trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W2),
                   trade("c", "SELL", "1", "50", "2026-03-05T10:00:00Z", isin=W2)])
     watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")
+    watch.remember(client.app.state.conn, ISIN, "Held and listed", "ETF")
     d = page_data(client.get("/").text)
     assert d["isins"] == [ISIN, W3, W2] and d["groups"] == ["active", "watch", "inactive"]
+    # the popup lists every Scalable entry for removal, a held one too (it stays in Active)
+    assert d["listed"] == [True, True, False]

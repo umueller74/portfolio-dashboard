@@ -59,6 +59,7 @@ class IngestIn(BaseModel):
     quotes: list[QuoteIn] = []
     ticks: list[TickIn] = []          # every chart point the fetcher saw
     watchlist: list[WatchIn] | None = None  # None: the fetcher could not read it, keep the stored one
+    watchlist_read_at: datetime | None = None  # when the fetcher read it: popup adds after that are kept
 
 
 def _utc(dt: datetime) -> str:
@@ -109,9 +110,7 @@ async def ingest(body: IngestIn, request: Request, tasks: BackgroundTasks):
             (body.fetched_at.isoformat(),),
         )
         if body.watchlist is not None:
-            conn.execute("delete from watchlist")
-            conn.executemany("insert or replace into watchlist(isin,name,type) values(?,?,?)",
-                             [(w.isin, w.name, w.type) for w in body.watchlist])
+            watch.replace(conn, [(w.isin, w.name, w.type) for w in body.watchlist], body.watchlist_read_at)
             conn.execute("insert or ignore into meta(key,value) values('watch_since',?)", (_utc(body.fetched_at),))
     if body.watchlist is not None:
         watch.reconcile(conn, day)

@@ -209,3 +209,43 @@ def test_actions_endpoint_requires_token(client):
     assert client.get("/api/watchlist/actions").status_code == 401
     r = client.get("/api/watchlist/actions", headers=AUTH)
     assert r.status_code == 200 and r.json() == NONE
+
+
+def listed(conn):
+    return {r["isin"]: r["added_at"] for r in conn.execute("select isin, added_at from watchlist")}
+
+
+def test_popup_add_during_a_running_fetch_survives_its_ingest(client):
+    from datetime import datetime, timezone
+    conn = client.app.state.conn
+    ingest(client, "2026-10-01", watchlist=[ENTRY])
+    assert listed(conn) == {ISIN: None}   # rows from an ingest carry no add time
+    watch.remember(conn, "IE2", "Before", "ETF", now=datetime(2026, 10, 2, 9, 59, tzinfo=timezone.utc))
+    watch.remember(conn, "IE3", "After", "ETF", now=datetime(2026, 10, 2, 10, 1, tzinfo=timezone.utc))
+    assert listed(conn)["IE3"] == "2026-10-02T10:01:00+00:00"
+    # the fetch read the list at 10:00, before IE3 was added in the popup: IE3 stays, IE2 (read, not listed) goes
+    body = payload(fetched_at="2026-10-02T10:05:00+00:00", trades=[], closes=[], quotes=[], watchlist=[ENTRY],
+                   watchlist_read_at="2026-10-02T12:00:00+02:00")
+    assert client.post("/api/ingest", headers=AUTH, json=body).status_code == 200
+    assert listed(conn) == {ISIN: None, "IE3": "2026-10-02T10:01:00+00:00"}
+    # the next fetch lists it: it is a plain Scalable entry now, and goes when Scalable drops it
+    ingest(client, "2026-10-03", watchlist=[ENTRY, {"isin": "IE3", "name": "After", "type": "ETF"}])
+    assert listed(conn) == {ISIN: None, "IE3": None}
+    ingest(client, "2026-10-04", watchlist=[ENTRY])
+    assert listed(conn) == {ISIN: None}
+
+
+def test_ingest_without_read_instant_replaces_the_whole_list(client):
+    from datetime import datetime, timezone
+    conn = client.app.state.conn
+    watch.remember(conn, "IE3", "After", "ETF", now=datetime(2026, 10, 2, 10, 1, tzinfo=timezone.utc))
+    ingest(client, "2026-10-02", watchlist=[ENTRY])
+    assert listed(conn) == {ISIN: None}
+
+
+def test_remember_stamps_now(client):
+    from datetime import datetime, timezone
+    conn = client.app.state.conn
+    before = datetime.now(timezone.utc)
+    watch.remember(conn, "IE2", "Other", "STOCK")
+    assert before <= datetime.fromisoformat(listed(conn)["IE2"]) <= datetime.now(timezone.utc)

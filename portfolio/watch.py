@@ -1,4 +1,5 @@
-"""The Scalable watchlist, mirrored from each fetch into `watchlist`, and the sell-out rules that edit it.
+"""The Scalable watchlist, mirrored from each fetch into `watchlist` (keeping popup adds the fetch could not
+see yet), and the sell-out rules that edit it.
 When a position goes to zero, the dashboard adds its ISIN to the Scalable watchlist once for that sell-out,
 and removes it again 3 months after the last trade. The fetcher performs the adds and removes (`actions`)
 before its next fetch; the list it then sends confirms them. `watch_auto` keeps one row per sold-out ISIN:
@@ -11,7 +12,7 @@ release writes nothing. While an ISIN is held again, a pending add is cancelled 
 but an entry the dashboard added stays its own (`pending_remove` back to `added`, the clock paused); its next
 sell-out restarts the 3 months (`added` again, or `pending_add` if the user removed it meanwhile)."""
 import calendar
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from portfolio import services
@@ -112,10 +113,31 @@ def watched(conn) -> dict[str, dict]:
     return out
 
 
-def remember(conn, isin: str, name: str, type: str) -> None:
+def remember(conn, isin: str, name: str, type: str, now: datetime | None = None) -> None:
+    """The user added the entry in the popup. `added_at` (now, UTC) keeps it through the ingest of a fetch
+    that read the Scalable list before the add (see `replace`)."""
+    at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
     with conn:
-        conn.execute("insert into watchlist(isin,name,type) values(?,?,?)"
-                     " on conflict(isin) do update set name=excluded.name, type=excluded.type", (isin, name, type))
+        conn.execute("insert into watchlist(isin,name,type,added_at) values(?,?,?,?)"
+                     " on conflict(isin) do update set name=excluded.name, type=excluded.type,"
+                     " added_at=excluded.added_at", (isin, name, type, at))
+
+
+def replace(conn, entries: list[tuple[str, str, str]], read_at: datetime | None) -> None:
+    """The list a fetch read replaces the stored one (inside the caller's transaction). Entries added in the
+    popup after `read_at` (when the fetch read the list) are kept; without `read_at` nothing is. The fetch's
+    entries carry no `added_at`."""
+    keep = set()
+    if read_at is not None:
+        read_at = read_at if read_at.tzinfo else read_at.replace(tzinfo=timezone.utc)
+        keep = {r["isin"] for r in conn.execute("select isin, added_at from watchlist where added_at is not null")
+                if datetime.fromisoformat(r["added_at"]) > read_at}
+    for (isin,) in conn.execute("select isin from watchlist").fetchall():
+        if isin not in keep:
+            conn.execute("delete from watchlist where isin=?", (isin,))
+    conn.executemany("insert into watchlist(isin,name,type,added_at) values(?,?,?,null)"
+                     " on conflict(isin) do update set name=excluded.name, type=excluded.type, added_at=null",
+                     entries)
 
 
 def manual(conn, isin: str, added: bool) -> None:

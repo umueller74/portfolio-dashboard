@@ -48,7 +48,7 @@ fetchBtn.onclick = async () => {
   fetchBtn.disabled = true; fetchMsg.textContent = 'fetching…';
   try {
     const r = await fetch('/fetch', {method: 'POST', headers: {'X-Requested-With': 'fetch'}});
-    if (r.status !== 202 && r.status !== 409) return fetchDone('failed: ' + ((await r.json()).error || r.status));
+    if (r.status !== 202) return fetchDone('failed: ' + ((await r.json()).error || r.status));
   } catch (err) { return fetchDone('failed: ' + err); }
   fetchPoll(fetchBtn.dataset.last);
 };

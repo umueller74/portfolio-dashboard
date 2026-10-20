@@ -66,16 +66,18 @@ def marker_series(markers: dict, labels: list[date], values: list[float]) -> dic
 def etf_tabs(conn, ov) -> list[dict]:
     """One entry per ETF ever traded or watched, in its group: "active" (held, by value), "watch" (not held but
     on the watchlist, by name), "inactive" (the other traded ones, by name). Each carries its trade rows for
-    the table (none for a never-traded one) and whether it was ever traded."""
+    the table (none for a never-traded one), whether it was ever traded, and whether it is on the Scalable
+    watchlist (`listed`, so the popup can remove a held one too)."""
     held = [h.isin for h in ov.holdings]
     traded = {t.isin: t.name for t in services.load_trades(conn)}
     on = watch.watched(conn)
+    listed = {r[0] for r in conn.execute("select isin from watchlist")}
     names = {**{i: e["name"] for i, e in on.items()}, **traded}   # a traded ETF keeps its trades' name
     by_name = lambda isins: sorted(isins, key=lambda i: names[i])
     groups = [("active", held), ("watch", by_name(i for i in on if i not in held)),
               ("inactive", by_name(i for i in traded if i not in held and i not in on))]
     return [{"isin": i, "name": names[i], "group": g, "active": g == "active", "traded": i in traded,
-             "rows": services.isin_detail(conn, i).rows if i in traded else []}
+             "listed": i in listed, "rows": services.isin_detail(conn, i).rows if i in traded else []}
             for g, isins in groups for i in isins]
 
 
@@ -319,7 +321,7 @@ async def watchlist_add(request: Request, x_requested_with: str = Header(default
     watch.remember(conn, isin, name, kind)
     watch.manual(conn, isin, True)
     try:
-        request.app.state.trigger("POST")   # 409 = a fetch already runs, which will see the entry too
+        request.app.state.trigger("POST")   # while a fetch runs, the listener queues one more that sees the entry
     except OSError:
         pass                                # added on Scalable; the next scheduled fetch picks it up
     return {"status": "ok"}
@@ -329,10 +331,14 @@ async def watchlist_add(request: Request, x_requested_with: str = Header(default
 def watchlist_remove(request: Request, isin: str, x_requested_with: str = Header(default="")):
     if err := _guard(request, x_requested_with):
         return err
-    _, err = _watchlist_call(request, "POST", "/watchlist", {"isin": isin, "action": "remove"})
-    if err:
-        return err
-    watch.manual(request.app.state.conn, isin, False)
+    conn = request.app.state.conn
+    auto = conn.execute("select state from watch_auto where isin=?", (isin,)).fetchone()
+    listed = conn.execute("select 1 from watchlist where isin=?", (isin,)).fetchone()
+    if not (auto and auto[0] == "pending_add" and not listed):   # an auto-add not sent yet: just cancel it
+        _, err = _watchlist_call(request, "POST", "/watchlist", {"isin": isin, "action": "remove"})
+        if err:
+            return err
+    watch.manual(conn, isin, False)
     return {"status": "ok"}
 
 
