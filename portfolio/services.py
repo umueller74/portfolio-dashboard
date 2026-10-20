@@ -50,6 +50,20 @@ def ticks(conn, isin: str) -> list[tuple[datetime, Decimal]]:
             for r in conn.execute("select at, price from ticks where isin=? order by at", (isin,))]
 
 
+def coarse_closes(conn, isin: str) -> list[tuple[date, Decimal]]:
+    """For the days before the ETF's first stored close, the last stored price of each Berlin day, oldest
+    first: the broker's coarse chart points before its daily ones."""
+    rows = _closes(conn).get(isin)
+    first = rows[0][0] if rows else None
+    by_day: dict[date, Decimal] = {}
+    for at, price in ticks(conn, isin):
+        day = _day(at)
+        if first is not None and day >= first:
+            break
+        by_day[day] = price
+    return list(by_day.items())
+
+
 def _price_on(rows: list[tuple[date, Decimal]] | None, day: date) -> Decimal | None:
     if not rows:
         return None

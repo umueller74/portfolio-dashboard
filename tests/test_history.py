@@ -113,3 +113,12 @@ def test_ingest_backfills_the_history_of_its_etfs(tmp_path):
     client = TestClient(create_app(tmp_path / "p.db", TOKEN, history=src))
     assert client.post("/api/ingest", json=payload(), headers=AUTH).status_code == 200
     assert src.calls == [ISIN] and stored(client.app.state.conn)[0] == ("2025-12-31", "99")
+
+
+def test_backfill_includes_watched(conn):
+    from portfolio import watch
+    watch.remember(conn, "IE00000000W3", "Zeta ETF", "ETF")
+    src = Source({"IE00000000W3": [(date(2025, 6, 2), D("7"))]})
+    history.backfill(conn, src)
+    history.backfill(conn, src)
+    assert src.calls == [ISIN, "IE00000000W3"] and stored(conn, "IE00000000W3") == [("2025-06-02", "7")]

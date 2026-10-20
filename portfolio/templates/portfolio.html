@@ -54,7 +54,7 @@
 
 <div class="split">
 <div class="side" id="etfs"><button class="btn active" data-isin="">Overview</button>
-{% for label, active in [('Active', true), ('Inactive', false)] %}{% set group = tabs|selectattr('active', 'equalto', active)|list %}{% if group %}
+{% for label, key in [('Active', 'active'), ('Watchlist', 'watch'), ('Inactive', 'inactive')] %}{% set group = tabs|selectattr('group', 'equalto', key)|list %}{% if group %}
 <div class="grp">{{ label }}</div>{% for t in group %}<button class="btn etf" data-isin="{{ t.isin }}" title="{{ t.isin }}">{{ t.name }}</button>{% endfor %}
 {% endif %}{% endfor %}</div>
 <div class="tablewrap"><table id="trades" class="hide-etf">

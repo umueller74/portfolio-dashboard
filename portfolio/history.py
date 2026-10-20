@@ -1,6 +1,7 @@
 """Price history from before the broker's own closes. The MCP's chart is daily only for the current year, so
-for every ETF ever traded the daily closes since its launch are fetched once from justETF and stored in
-`closes` for the days before the first close already there; from then on the broker's closes take over."""
+for every ETF ever traded or on the watchlist the daily closes since its launch are fetched once from justETF
+and stored in `closes` for the days before the first close already there; from then on the broker's closes
+take over."""
 import json
 import logging
 import urllib.error
@@ -35,12 +36,13 @@ def justetf(isin: str, opener=urllib.request.urlopen) -> list[tuple[date, Decima
 
 
 def backfill(conn, source: Source | None) -> None:
-    """Fetch the history of each traded ETF not done yet. A failed fetch is retried on the next call;
-    an ISIN the source does not know is marked done, so it is not asked again."""
+    """Fetch the history of each traded or watchlisted ETF not done yet. A failed fetch is retried on the next
+    call; an ISIN the source does not know is marked done, so it is not asked again."""
     if source is None:
         return
     pending = [r["isin"] for r in conn.execute(
-        "select distinct isin from trades where isin not in (select isin from backfills) order by isin")]
+        "select isin from trades union select isin from watchlist"
+        " except select isin from backfills order by isin")]
     for isin in pending:
         try:
             points = source(isin)

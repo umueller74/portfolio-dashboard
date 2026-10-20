@@ -1,8 +1,10 @@
 import json
 import re
+from datetime import date
+from decimal import Decimal as D
 
-from portfolio import services
-from portfolio.web import view_data
+from portfolio import services, watch
+from portfolio.web import etf_tabs, view_data
 from tests.conftest import AUTH, payload
 from tests.test_services import ISIN, seed, trade
 
@@ -441,3 +443,94 @@ def test_trigger_client_turns_a_non_json_reply_into_an_oserror():
         assert "invalid reply" in str(e)
     else:
         raise AssertionError("expected OSError")
+
+
+W1, W2, W3 = "IE00000000W1", "IE00000000W2", "IE00000000W3"
+
+
+def test_tabs_groups(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W1),
+                  trade("c", "SELL", "1", "50", "2026-10-05T10:00:00Z", isin=W1),
+                  trade("d", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W2),
+                  trade("e", "SELL", "1", "50", "2026-03-05T10:00:00Z", isin=W2)])
+    conn = client.app.state.conn
+    with conn:
+        conn.execute("insert into watch_auto(isin,sold_on,state) values(?,?,?)", (W1, "2026-10-05", "added"))
+    watch.remember(conn, W3, "Zeta Corp", "STOCK")
+    watch.remember(conn, ISIN, "Held and listed", "ETF")
+    tabs = etf_tabs(conn, services.overview(conn, date(2026, 10, 20)))
+    got = [(t["isin"], t["group"], t["active"], t["traded"], len(t["rows"])) for t in tabs]
+    assert got == [(ISIN, "active", True, True, 1), (W1, "watch", False, True, 2),
+                   (W3, "watch", False, False, 0), (W2, "inactive", False, True, 2)]
+    assert tabs[2]["name"] == "Zeta Corp"
+
+
+def test_page_shows_watchlist_group_between(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W2),
+                  trade("c", "SELL", "1", "50", "2026-03-05T10:00:00Z", isin=W2)])
+    watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")
+    html = client.get("/").text
+    assert html.index(">Active<") < html.index(">Watchlist<") < html.index(">Inactive<")
+    assert html.index(">Watchlist<") < html.index(f'data-isin="{W3}" title') < html.index(">Inactive<")
+    assert page_data(html)["isins"] == [ISIN, W3, W2]
+
+
+def test_watched_view_without_prices(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
+    watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")
+    r = client.get(f"/view/{W3}")
+    assert r.status_code == 200
+    v, cards = r.json()["view"], r.json()["cards"]
+    assert v["watch"] is True and v["labels"] == v["values"] == v["invested"] == []
+    assert v["plabels"] == [] and v["second"] == []
+    assert cards["1y"] == {"price": "n/a", "session": "n/a", "range": "n/a"}
+
+
+def test_watched_view_with_closes(client):
+    watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")   # no holdings at all
+    client.post("/api/ingest", headers=AUTH, json=payload(
+        trades=[], quotes=[], closes=[{"isin": W3, "day": d, "price": p} for d, p in
+                                      [("2026-01-02", "80"), ("2026-10-08", "100"), ("2026-10-09", "110")]]))
+    r = client.get(f"/view/{W3}")
+    assert r.status_code == 200
+    v, cards = r.json()["view"], r.json()["cards"]
+    assert v["watch"] is True and v["labels"] == [] and v["second"] == [80.0, 100.0, 110.0]
+    assert len(v["ma20"]) == 3 and v["pmarkers"]["cash_buy"] == [None] * 3
+    assert cards["1y"]["price"] == "110.00 €"
+    assert cards["1y"]["session"] == "+10.00 € (+10.00 %)"
+    assert cards["1d"]["range"] == "+10.00 € (+10.00 %)"
+    assert cards["all"]["range"] == "+30.00 € (+37.50 %)"
+    assert "watch" not in view_data(client.app.state.conn, None)
+    assert client.get("/view/IE9999999999").status_code == 404
+
+
+def test_traded_watched_view_keeps_the_sold_etf_view(client):
+    seed(client, [trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W1),
+                  trade("c", "SELL", "1", "50", "2026-10-05T10:00:00Z", isin=W1),
+                  trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")],
+         closes=[{"isin": W1, "day": "2026-02-05", "price": "50"}])
+    watch.remember(client.app.state.conn, W1, "Listed name", "ETF")
+    j = client.get(f"/view/{W1}").json()
+    assert "watch" not in j["view"] and j["view"]["labels"] == ["2026-02-05"]
+    assert "pnl" in j["cards"]["1y"] and "range" not in j["cards"]["1y"]
+
+
+def test_coarse_ticks_prepended(client):
+    ticks = [{"isin": ISIN, "at": at, "price": p} for at, p in [
+        ("2025-11-03T09:00:00Z", "80"), ("2025-11-03T15:00:00Z", "81"),   # the day's last tick wins
+        ("2025-12-01T22:30:00Z", "85"),                                   # 23:30 Berlin: still 2025-12-01
+        ("2026-01-02T10:00:00Z", "99")]]                                  # the first close's day: not coarse
+    seed(client, [trade("a", "BUY", "5", "100", "2025-11-03T10:00:00Z")],
+         closes=[{"isin": ISIN, "day": "2026-01-02", "price": "101"}])
+    client.post("/api/ingest", headers=AUTH, json=payload(trades=[], closes=[], quotes=[], ticks=ticks))
+    conn = client.app.state.conn
+    assert services.coarse_closes(conn, ISIN) == [(date(2025, 11, 3), D("81")),
+                                                  (date(2025, 12, 1), D("85"))]
+    v = view_data(conn, ISIN)
+    assert v["plabels"] == ["2025-11-03", "2025-12-01", "2026-01-02"]
+    assert v["second"] == [81.0, 85.0, 101.0]
+    assert v["ma20"][:2] == [None, None] and v["ma50"][:2] == [None, None]
+    assert v["pmarkers"]["cash_buy"][:2] == [None, None] and len(v["pmarkers"]["tooltips"]) == 3
+    assert v["labels"] == ["2026-01-02"]                              # the value chart keeps the closes only
