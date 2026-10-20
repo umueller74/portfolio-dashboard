@@ -206,12 +206,18 @@ def test_responses_are_gzipped(client):
 
 
 class FakeTrigger:
-    def __init__(self, post=(202, {"status": "started"}), get=(200, {"running": True, "last_exit": None})):
-        self.replies, self.calls = {"POST": post, "GET": get}, []
+    def __init__(self, post=(202, {"status": "started"}), get=(200, {"running": True, "last_exit": None}),
+                 search=(200, {"results": []}), watchlist=(200, {"status": "ok"})):
+        self.replies, self.calls, self.requests = {"POST": post, "GET": get}, [], []
+        self.search, self.watchlist = search, watchlist
 
-    def __call__(self, method):
-        self.calls.append(method)
-        reply = self.replies[method]
+    def __call__(self, method, path="/fetch", body=None):
+        self.requests.append((method, path, body))
+        if path == "/fetch":
+            self.calls.append(method)
+            reply = self.replies[method]
+        else:
+            reply = self.search if path.startswith("/search") else self.watchlist
         if isinstance(reply, Exception):
             raise reply
         return reply
@@ -282,9 +288,120 @@ def test_trigger_client_calls_the_listener_with_the_token():
     assert seen == [("POST", "http://raspi2:8770/fetch", "Bearer tok"), ("GET", "http://raspi2:8770/fetch", "Bearer tok")]
 
 
+def test_trigger_client_paths():
+    import io
+    from portfolio.refresh import trigger_client as make
+    seen = []
+
+    class Resp(io.BytesIO):
+        status = 200
+
+    def opener(req, timeout):
+        seen.append((req.method, req.full_url, req.data, req.get_header("Content-type")))
+        return Resp(b"{}")
+
+    call = make("http://raspi2:8770/fetch", "tok", opener)
+    call("GET", "/search?q=x")
+    call("POST", "/watchlist", {"isin": "I", "action": "add"})
+    assert seen == [("GET", "http://raspi2:8770/search?q=x", None, None),
+                    ("POST", "http://raspi2:8770/watchlist", b'{"isin": "I", "action": "add"}', "application/json")]
+
+
 def test_trade_rows_carry_their_berlin_day_for_the_range_filter(client):
     # 23:30 UTC is already the next day in Berlin: the range buttons filter on the day the table shows
     seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T23:30:00Z")])
     html = client.get("/").text
     assert f'<tr data-isin="{ISIN}" data-day="2026-01-06">' in html
     assert "tradesFrom(rangeKey)" in html
+
+
+def wl_client(tmp_path, trig):
+    from tests.test_services import seed
+    c = trigger_client(tmp_path, trig)
+    seed(c, [trade("a", "BUY", "5", "100", "2026-08-03T10:00:00Z")])
+    return c
+
+
+HIT = {"name": "N", "type": "ETF", "price": "1.5", "currency": "EUR"}
+
+
+def test_search_marks_held_and_watched(tmp_path):
+    from portfolio import watch
+    hits = [{"isin": ISIN, **HIT}, {"isin": "IE2", **HIT}, {"isin": "IE3", **HIT}]
+    trig = FakeTrigger(search=(200, {"results": hits}))
+    c = wl_client(tmp_path, trig)
+    watch.remember(c.app.state.conn, "IE2", "N", "ETF")
+    r = c.get("/watchlist/search", params={"q": "wor ld&x"}, headers=XHR)
+    assert r.status_code == 200
+    assert [h["state"] for h in r.json()["results"]] == ["held", "watched", ""]
+    assert trig.requests == [("GET", "/search?q=wor%20ld%26x", None)]
+
+
+def test_add_stores_entry_and_starts_fetch(tmp_path):
+    from portfolio import watch
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": "ETF"}, headers=XHR)
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+    assert watch.watched(c.app.state.conn)["IE2"] == {"name": "Other", "type": "ETF"}
+    assert trig.requests == [("POST", "/watchlist", {"isin": "IE2", "action": "add"}), ("POST", "/fetch", None)]
+
+
+def test_add_with_a_running_fetch_is_fine(tmp_path):
+    c = wl_client(tmp_path, FakeTrigger(post=(409, {"status": "running"})))
+    r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": ""}, headers=XHR)
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+
+
+def test_add_turns_auto_row_manual(tmp_path):
+    from tests.test_watch import ENTRY, added
+    c = trigger_client(tmp_path, FakeTrigger())
+    conn = added(c)
+    conn.execute("update watch_auto set state='pending_add'")
+    conn.commit()
+    assert c.post("/watchlist", json=ENTRY, headers=XHR).status_code == 200
+    assert conn.execute("select state from watch_auto").fetchone()[0] == "done"
+
+
+def test_remove_deletes_entry(tmp_path):
+    from portfolio import watch
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    watch.remember(c.app.state.conn, "IE2", "Other", "ETF")
+    r = c.delete("/watchlist/IE2", headers=XHR)
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+    assert "IE2" not in watch.watched(c.app.state.conn)
+    assert trig.requests == [("POST", "/watchlist", {"isin": "IE2", "action": "remove"})]
+
+
+def test_failed_listener_changes_nothing(tmp_path):
+    from portfolio import watch
+    c = wl_client(tmp_path, FakeTrigger(watchlist=(502, {"error": "mcp"})))
+    r = c.post("/watchlist", json={"isin": "IE2", "name": "Other", "type": ""}, headers=XHR)
+    assert r.status_code == 502 and r.json() == {"error": "mcp"}
+    assert "IE2" not in watch.watched(c.app.state.conn)
+
+
+def test_watchlist_routes_need_header(tmp_path):
+    trig = FakeTrigger()
+    c = wl_client(tmp_path, trig)
+    assert c.get("/watchlist/search", params={"q": "abc"}).status_code == 403
+    assert c.post("/watchlist", json={"isin": "I", "name": "N", "type": ""}).status_code == 403
+    assert c.delete("/watchlist/I").status_code == 403
+    assert trig.requests == []
+
+
+def test_watchlist_routes_need_a_trigger(client):
+    assert client.get("/watchlist/search", params={"q": "abc"}, headers=XHR).status_code == 404
+    assert client.delete("/watchlist/I", headers=XHR).status_code == 404
+
+
+def test_search_short_query_and_listener_down(tmp_path):
+    c = wl_client(tmp_path, FakeTrigger(search=(400, {"error": "query too short"})))
+    r = c.get("/watchlist/search", params={"q": "a"}, headers=XHR)
+    assert r.status_code == 400 and r.json() == {"error": "query too short"}
+    (tmp_path / "x").mkdir()
+    c = wl_client(tmp_path / "x", FakeTrigger(search=OSError("refused"), watchlist=OSError("refused")))
+    r = c.get("/watchlist/search", params={"q": "abc"}, headers=XHR)
+    assert r.status_code == 502 and "refused" in r.json()["error"]
+    assert c.delete("/watchlist/I", headers=XHR).status_code == 502

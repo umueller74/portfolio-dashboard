@@ -1,12 +1,13 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
-from portfolio import services
+from portfolio import services, watch
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -218,6 +219,71 @@ def fetch_state(request: Request):
     except OSError as e:
         out["error"] = f"fetcher unreachable: {e}"
     return out
+
+
+def _watchlist_call(request: Request, x_requested_with: str, method: str, path: str, body: dict | None = None):
+    """The listener's reply for a watchlist call, or the error response when the call is not allowed or fails."""
+    trigger = request.app.state.trigger
+    if trigger is None:
+        return None, JSONResponse({"error": "no fetch trigger configured"}, status_code=404)
+    if x_requested_with != "fetch":
+        return None, JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        return trigger(method, path, body), None
+    except OSError as e:
+        return None, JSONResponse({"error": f"fetcher unreachable: {e}"}, status_code=502)
+
+
+@router.get("/watchlist/search")
+def watchlist_search(request: Request, q: str = "", x_requested_with: str = Header(default="")):
+    """The Scalable search for the popup; each hit is marked as held, already watched, or neither."""
+    reply, err = _watchlist_call(request, x_requested_with, "GET", f"/search?q={quote(q, safe='')}")
+    if err:
+        return err
+    code, body = reply
+    if code != 200:
+        return JSONResponse(body, status_code=code)
+    conn = request.app.state.conn
+    held = {h.isin for h in services.overview(conn, date.today()).holdings}
+    on = watch.watched(conn)
+    for hit in body.get("results", []):
+        hit["state"] = "held" if hit["isin"] in held else "watched" if hit["isin"] in on else ""
+    return body
+
+
+@router.post("/watchlist")
+async def watchlist_add(request: Request, x_requested_with: str = Header(default="")):
+    try:
+        entry = await request.json()
+        isin, name, kind = entry["isin"], entry["name"], entry.get("type", "")
+    except (ValueError, KeyError, TypeError):
+        return JSONResponse({"error": "isin and name needed"}, status_code=400)
+    reply, err = _watchlist_call(request, x_requested_with, "POST", "/watchlist", {"isin": isin, "action": "add"})
+    if err:
+        return err
+    code, body = reply
+    if code != 200:
+        return JSONResponse(body, status_code=code)
+    conn = request.app.state.conn
+    watch.remember(conn, isin, name, kind)
+    watch.manual(conn, isin, True)
+    try:
+        request.app.state.trigger("POST")   # 409 = a fetch already runs, which will see the entry too
+    except OSError:
+        pass                                # added on Scalable; the next scheduled fetch picks it up
+    return {"status": "ok"}
+
+
+@router.delete("/watchlist/{isin}")
+def watchlist_remove(request: Request, isin: str, x_requested_with: str = Header(default="")):
+    reply, err = _watchlist_call(request, x_requested_with, "POST", "/watchlist", {"isin": isin, "action": "remove"})
+    if err:
+        return err
+    code, body = reply
+    if code != 200:
+        return JSONResponse(body, status_code=code)
+    watch.manual(request.app.state.conn, isin, False)
+    return {"status": "ok"}
 
 
 @router.get("/metrics", response_class=PlainTextResponse)
