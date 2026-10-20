@@ -85,29 +85,15 @@ def push(body: dict, ingest_url: str, ingest_token: str, opener=urllib.request.u
 
 
 async def _main() -> None:
-    from fetcher.auth_hermes import bootstrap, build_auth
+    from fetcher.auth_hermes import bootstrap
 
     bootstrap()  # must precede any `mcp` import
-    from mcp import ClientSession
-    from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
+    from fetcher.session import open_call
 
-    url = os.environ.get("MCP_URL", "https://mcp.scalable.capital/mcp")
-    http_client = create_mcp_http_client(auth=build_auth(url))
-    async with http_client:
-        async with streamable_http_client(url, http_client=http_client) as streams:
-            async with ClientSession(streams[0], streams[1]) as session:
-                await session.initialize()
-
-                async def call(tool: str, args: dict) -> dict:
-                    result = await session.call_tool(tool, args)
-                    text = result.content[0].text
-                    if result.is_error:
-                        raise RuntimeError(f"{tool} failed: {text}")
-                    return json.loads(text)
-
-                timeframes = await chart_timeframes(session)
-                log.info("chart timeframes: %s", ", ".join(timeframes))
-                body = await collect(call, os.environ["STATE_DIR"], timeframes)
+    async with open_call(os.environ.get("MCP_URL", "https://mcp.scalable.capital/mcp")) as call:
+        timeframes = await chart_timeframes(call.session)
+        log.info("chart timeframes: %s", ", ".join(timeframes))
+        body = await collect(call, os.environ["STATE_DIR"], timeframes)
     push(body, os.environ["INGEST_URL"], os.environ["INGEST_TOKEN"])
     log.info("pushed %d trades, %d closes, %d quotes, %d ticks",
              len(body["trades"]), len(body["closes"]), len(body["quotes"]), len(body["ticks"]))
