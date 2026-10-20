@@ -41,7 +41,9 @@ def parse_transactions(payload) -> tuple[list[dict], str | None]:
 
 
 def parse_watchlist(payload) -> list[dict]:
-    return [{"isin": i["isin"], "name": i["name"], "type": i["securityType"]} for i in unwrap(payload)["items"]]
+    """The list's entries; a missing name falls back to the ISIN, a missing type to "", one without ISIN is skipped."""
+    return [{"isin": i["isin"], "name": i.get("name") or i["isin"], "type": i.get("securityType") or ""}
+            for i in unwrap(payload)["items"] if i.get("isin")]
 
 
 def fee_from_details(payload) -> Decimal:
@@ -107,8 +109,11 @@ def chart_timeframes(tools: list[dict]) -> list[str]:
     return list(KNOWN_TIMEFRAMES)
 
 
-def parse_quote(payload) -> dict:
+def parse_quote(payload) -> dict | None:
+    """The quote, or None when it has no mid price."""
     sec = unwrap(payload)["security"]
     q = sec["quote"]
+    if q.get("midPrice") is None:
+        return None
     return {"isin": sec["isin"], "price": str(q["midPrice"]), "quoted_at": q["timestampUtc"],
             "outdated": bool(q["isOutdated"])}

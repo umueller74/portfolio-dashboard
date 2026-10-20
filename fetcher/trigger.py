@@ -1,6 +1,7 @@
 """HTTP listener on the fetcher host, so the dashboard's "Fetch now" button can start a fetch. Standard library
 only (runs on Hermes' interpreter, started as a script). With the ingest token as bearer, POST /fetch starts
-FETCH_CMD unless one still runs (409), GET /fetch tells whether one runs and how the last one ended. With an
+FETCH_CMD, or while one runs queues one follow-up run (202 "queued"), GET /fetch tells whether one runs and how
+the last one ended. With an
 `mcp` caller, GET /search?q= searches Scalable's securities and POST /watchlist adds or removes an ISIN."""
 import hmac
 import json
@@ -16,26 +17,42 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # run by path: `python -I trigger.py`
 
 log = logging.getLogger("trigger")
+MAX_BODY = 65536
 
 
 class Runner:
-    """At most one fetch process at a time; remembers the exit code of the last one."""
+    """At most one fetch process at a time, plus at most one queued follow-up; remembers the exit code of the
+    last one. A waiter thread per process reaps it and starts the follow-up, so that needs no caller."""
 
     def __init__(self, cmd: list[str]):
-        self.cmd, self.proc, self.last_exit = cmd, None, None
+        self.cmd, self.proc, self.last_exit, self.queued = cmd, None, None, False
         self.lock = threading.Lock()
+
+    def _spawn(self) -> None:
+        self.proc = proc = subprocess.Popen(self.cmd, stdin=subprocess.DEVNULL)
+        threading.Thread(target=self._wait, args=(proc,), daemon=True).start()
+
+    def _wait(self, proc) -> None:
+        proc.wait()
+        with self.lock:
+            self._reap()
 
     def _reap(self) -> None:
         if self.proc is not None and self.proc.poll() is not None:
             self.last_exit, self.proc = self.proc.returncode, None
+            if self.queued:
+                self.queued = False
+                self._spawn()
 
-    def start(self) -> bool:
+    def start(self) -> str:
+        """"started", or "queued" when one runs: one more run follows it (later calls change nothing)."""
         with self.lock:
             self._reap()
             if self.proc is not None:
-                return False
-            self.proc = subprocess.Popen(self.cmd, stdin=subprocess.DEVNULL)
-            return True
+                self.queued = True
+                return "queued"
+            self._spawn()
+            return "started"
 
     def status(self) -> dict:
         with self.lock:
@@ -88,11 +105,15 @@ def make_server(host: str, port: int, token: str, runner: Runner, mcp=None) -> T
                 return self._reply(400, {"error": "query too short"})
             found = self._mcp("search_securities", {"query": q})
             if found is not None:
-                self._reply(200, {"results": [_hit(r) for r in found.get("results", [])]})
+                hits = (found.get("results") if isinstance(found, dict) else None) or []
+                self._reply(200, {"results": [_hit(r) for r in hits if isinstance(r, dict)]})
 
         def _watchlist(self) -> None:
             try:
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 <= length <= MAX_BODY:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
                 isin, tool = body["isin"], {"add": "add_watchlist_item", "remove": "remove_watchlist_item"}[body["action"]]
                 if not isinstance(isin, str) or not isin:
                     raise ValueError
@@ -112,12 +133,11 @@ def make_server(host: str, port: int, token: str, runner: Runner, mcp=None) -> T
             if self._allowed("POST"):
                 if urllib.parse.urlsplit(self.path).path == "/watchlist":
                     return self._watchlist()
-                started = runner.start()
-                if started:
-                    log.info("fetch started for %s", self.client_address[0])
-                self._reply(202, {"status": "started"}) if started else self._reply(409, {"status": "running"})
+                status = runner.start()
+                log.info("fetch %s for %s", status, self.client_address[0])
+                self._reply(202, {"status": status})
 
-        def log_message(self, fmt, *args):   # one line per started fetch is enough in the journal
+        def log_message(self, fmt, *args):   # one line per started or queued fetch is enough in the journal
             pass
 
     return ThreadingHTTPServer((host, port), Handler)

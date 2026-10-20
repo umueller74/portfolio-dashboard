@@ -124,7 +124,8 @@ async def test_chart_timeframes_read_mcp_2_tools_and_fall_back_on_errors():
 
 async def test_collect_applies_actions_then_reads_watchlist(tmp_path):
     log = []
-    body = await run.collect(fake_call(log), tmp_path, actions={"add": ["IE0000000002"], "remove": ["IE0000000003"]})
+    body = await run.collect(fake_call(log), tmp_path,
+                             actions=lambda: {"add": ["IE0000000002"], "remove": ["IE0000000003"]})
     tools = [t for t, _ in log]
     assert ("add_watchlist_item", {"isin": "IE0000000002"}) in log
     assert ("remove_watchlist_item", {"isin": "IE0000000003"}) in log
@@ -143,7 +144,7 @@ async def test_collect_action_failure_does_not_fail_run(tmp_path):
             raise RuntimeError("add failed")
         return await base(tool, args)
 
-    body = await run.collect(call, tmp_path, actions={"add": ["IE0000000002"], "remove": []})
+    body = await run.collect(call, tmp_path, actions=lambda: {"add": ["IE0000000002"], "remove": []})
     assert [t["id"] for t in body["trades"]] == ["i1", "i2"]
     assert body["watchlist"][0]["isin"] == "US67066G1040"
 
@@ -176,7 +177,7 @@ def test_pending_actions_returns_none_on_error_and_parses_ok():
 
 async def test_collect_survives_actions_endpoint_failure(tmp_path):
     log = []
-    await run.collect(fake_call(log), tmp_path, actions=None)
+    await run.collect(fake_call(log), tmp_path, actions=lambda: None)
     assert not any(t in ("add_watchlist_item", "remove_watchlist_item") for t, _ in log)
 
 
@@ -190,3 +191,128 @@ async def test_collect_without_watchlist_tool(tmp_path):
 
     body = await run.collect(call, tmp_path)
     assert "watchlist" not in body and len(body["trades"]) == 2
+
+
+async def test_collect_reads_the_actions_after_the_trades(tmp_path):
+    log = []
+
+    def actions():
+        log.append(("actions", {}))
+        return {"add": [], "remove": []}
+
+    await run.collect(fake_call(log), tmp_path, actions=actions)
+    tools = [t for t, _ in log]
+    assert tools.count("actions") == 1
+    assert max(i for i, t in enumerate(tools) if t in ("list_portfolio_transactions", "get_transaction_details")) \
+        < tools.index("actions") < tools.index("list_watchlist_items")
+
+
+async def test_collect_sends_when_it_read_the_watchlist(tmp_path):
+    from datetime import datetime
+    seen = {}
+    base = fake_call([])
+
+    async def call(tool, args):
+        if tool == "list_watchlist_items":
+            seen["at"] = datetime.now(run.timezone.utc)
+        return await base(tool, args)
+
+    before = datetime.now(run.timezone.utc)
+    body = await run.collect(call, tmp_path)
+    read_at = datetime.fromisoformat(body["watchlist_read_at"])
+    assert before <= read_at <= seen["at"] and read_at.tzinfo is not None
+
+
+async def test_collect_without_watchlist_sends_no_read_instant(tmp_path):
+    base = fake_call([])
+
+    async def call(tool, args):
+        if tool == "list_watchlist_items":
+            raise RuntimeError("unknown tool")
+        return await base(tool, args)
+
+    assert "watchlist_read_at" not in await run.collect(call, tmp_path)
+
+
+WATCHED = [{"isin": "US67066G1040", "name": "Nvidia", "securityType": "STOCK"},
+           {"isin": "US0231351067", "name": "Amazon", "securityType": "STOCK"},
+           {"isin": "US5949181045", "name": "Microsoft", "securityType": "STOCK"}]
+
+
+async def test_collect_skips_a_watched_isin_whose_chart_or_quote_fails(tmp_path):
+    base = fake_call([])
+
+    async def call(tool, args):
+        isin = args.get("isin")
+        if tool == "list_watchlist_items":
+            return {"items": WATCHED}
+        if tool == "get_security_chart" and isin == "US67066G1040":
+            raise RuntimeError("get_security_chart failed: not found")
+        if tool == "get_security_quote" and isin == "US0231351067":
+            return {"security": {"isin": isin}}   # no quote
+        return await base(tool, args)
+
+    body = await run.collect(call, tmp_path)
+    assert [t["id"] for t in body["trades"]] == ["i1", "i2"]
+    assert {c["isin"] for c in body["closes"]} == {"IE0000000001", "IE0000000002", "US5949181045"}
+    assert {q["isin"] for q in body["quotes"]} == {"IE0000000001", "IE0000000002", "US5949181045"}
+    assert {t["isin"] for t in body["ticks"]} == {"IE0000000001", "IE0000000002", "US5949181045"}
+    assert len(body["watchlist"]) == 3
+
+
+async def test_collect_skips_a_watched_isin_whose_chart_is_garbage(tmp_path):
+    base = fake_call([])
+
+    async def call(tool, args):
+        if tool == "get_security_chart" and args["isin"] == "US67066G1040":
+            return "not json"
+        return await base(tool, args)
+
+    body = await run.collect(call, tmp_path)
+    assert "US67066G1040" not in {c["isin"] for c in body["closes"]} | {q["isin"] for q in body["quotes"]}
+
+
+async def test_collect_still_fails_when_a_traded_isins_daily_chart_fails(tmp_path):
+    import pytest
+    base = fake_call([])
+
+    async def call(tool, args):
+        if tool == "get_security_chart" and args["isin"] == "IE0000000001" and args["timeframe"] == "year_to_date":
+            raise RuntimeError("get_security_chart failed")
+        return await base(tool, args)
+
+    with pytest.raises(RuntimeError):
+        await run.collect(call, tmp_path)
+
+
+async def test_collect_never_sends_a_quote_without_a_price(tmp_path):
+    base = fake_call([])
+
+    async def call(tool, args):
+        if tool == "get_security_quote" and args["isin"] in ("IE0000000001", "US67066G1040"):
+            return {"security": {"isin": args["isin"], "quote": {"midPrice": None, "timestampUtc": "2026-10-09T20:59:56Z",
+                                                                 "isOutdated": False}}}
+        return await base(tool, args)
+
+    body = await run.collect(call, tmp_path)
+    assert {q["isin"] for q in body["quotes"]} == {"IE0000000002"}
+    assert "None" not in json.dumps(body["quotes"])
+    assert {"IE0000000001", "US67066G1040"} <= {c["isin"] for c in body["closes"]}   # the closes stay
+
+
+def test_pending_actions_rejects_a_malformed_payload():
+    def opener_for(payload):
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def read(self):
+                return json.dumps(payload).encode()
+        return lambda req, timeout: Resp()
+
+    for bad in (None, [], "x", {"add": None}, {"add": "A"}, {"add": [1]}, {"remove": [None]}):
+        assert run.pending_actions("https://x/api/ingest", "tok", opener=opener_for(bad)) is None, bad
+    assert run.pending_actions("https://x/api/ingest", "tok", opener=opener_for({"add": ["A"]})) == {"add": ["A"]}
