@@ -21,19 +21,20 @@ first trade); a failed fetch is retried on the next ingest. The ETF price chart 
 value chart still starts at the first trade.
 
 Every price: the fetcher reads the `timeframe` values of `get_security_chart` from the tool schema and sends every
-point of every timeframe as `ticks`; the app also keeps each quote as a tick. The ETF price chart plots every price
-point of the last month in the 1d, 1w and 1m ranges (one per Berlin minute; 1d is the last session), daily closes
-for the longer ones. Its "Trendlines" button (off by default) adds an upper and a lower line for each of the last
-day, week and month: from the window's earliest highest (lowest) price through the later price that keeps every
+point of every timeframe as `ticks`; the app also keeps each quote as a tick, and keeps every tick, so the detail
+of past days stays (Scalable itself has it for recent days only: about hourly for the last month, 15-minute for the
+last week). The ETF price chart plots every price point (one per Berlin minute) from the first day with prices at
+two minutes on, continued back in time by the daily closes, in the 1d, 1w and 1m ranges (1d is the last session),
+daily closes only for the longer ones. Its "Trendlines" button (off by default) adds an upper and a lower line for
+each of the last day, week and month: from the window's earliest highest (lowest) price through the later price that keeps every
 later price below (above) the line.
 
 The ETF price chart moves: the mouse wheel zooms the time axis around the pointer, a left drag pans it, ctrl+wheel
 scales the y axis; it reaches 65 trading days (daily closes) or 20 sessions (price points) into the future, where
 the trendlines continue. The range follows the wheel: it becomes the narrowest one that holds the shown days (zooming
 out of 1W selects 1M, then 3M and so on, zooming in goes back down), with the cards, the table and the value chart.
-The chart shows every price point while the window fits 1D, 1W or 1M and lies within the last month, the daily closes
-otherwise, so zooming out past the first price point continues over the closes and zooming into the last month brings
-the price points back. A range button or a double-click resets the window; a click without dragging maximizes.
+The chart shows every price point as soon as the x axis lists days or hours (a window of up to 45 days), the daily
+closes otherwise. A range button or a double-click resets the window; a click without dragging maximizes.
 Its title shows the price's change over the selected range, from the range's first price to the last one;
 a dashed line marks that first price, and the prices (line and dots) above it are green, those below red.
 
