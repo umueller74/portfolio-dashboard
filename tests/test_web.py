@@ -536,3 +536,22 @@ def test_coarse_ticks_prepended(client):
     assert v["ma20"][:2] == [None, None] and v["ma50"][:2] == [None, None]
     assert v["pmarkers"]["cash_buy"][:2] == [None, None] and len(v["pmarkers"]["tooltips"]) == 3
     assert v["labels"] == ["2026-01-02"]                              # the value chart keeps the closes only
+
+
+def test_edit_button_only_with_trigger(client, tmp_path):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
+    assert 'id="watchEdit"' not in client.get("/").text
+    (tmp_path / "t").mkdir()
+    c = trigger_client(tmp_path / "t", FakeTrigger())
+    seed(c, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z")])
+    html = c.get("/").text
+    assert 'id="watchEdit"' in html and 'id="watchPop"' in html
+
+
+def test_watchlist_entries_in_page_data(client):
+    seed(client, [trade("a", "BUY", "5", "100", "2026-01-05T10:00:00Z"),
+                  trade("b", "BUY", "1", "50", "2026-02-05T10:00:00Z", isin=W2),
+                  trade("c", "SELL", "1", "50", "2026-03-05T10:00:00Z", isin=W2)])
+    watch.remember(client.app.state.conn, W3, "Zeta Corp", "STOCK")
+    d = page_data(client.get("/").text)
+    assert d["isins"] == [ISIN, W3, W2] and d["groups"] == ["active", "watch", "inactive"]

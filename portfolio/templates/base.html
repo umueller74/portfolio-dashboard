@@ -28,21 +28,32 @@
 </main>
 {% if fetch_enabled %}<script>
 // "Fetch now": starts the fetcher on its host, then polls until a newer ingest has arrived and reloads
-document.getElementById('fetchNow').onclick = async e => {
-  const btn = e.currentTarget, msg = document.getElementById('fetchMsg'), before = btn.dataset.last;
-  const done = text => { msg.textContent = text; btn.disabled = false; };
-  btn.disabled = true; msg.textContent = 'fetching…';
+const fetchBtn = document.getElementById('fetchNow'), fetchMsg = document.getElementById('fetchMsg');
+const fetchDone = text => { fetchMsg.textContent = text; fetchBtn.disabled = false; };
+// waits for a running fetch: reloads once an ingest newer than `before` is in
+async function fetchPoll(before) {
+  fetchBtn.disabled = true; fetchMsg.textContent = 'fetching…';
   try {
-    const r = await fetch('/fetch', {method: 'POST', headers: {'X-Requested-With': 'fetch'}});
-    if (r.status !== 202 && r.status !== 409) return done('failed: ' + ((await r.json()).error || r.status));
     for (let waited = 0; waited < 600; waited += 5) {
       await new Promise(ok => setTimeout(ok, 5000));
       const s = await (await fetch('/fetch')).json();
       if (s.last_ingest && s.last_ingest !== before) return location.reload();
-      if (s.error) return done('failed: ' + s.error);
-      if (s.running === false) return done(`fetch failed (exit ${s.last_exit}), see journalctl -u portfolio-fetcher-trigger`);
+      if (s.error) return fetchDone('failed: ' + s.error);
+      if (s.running === false) return fetchDone(`fetch failed (exit ${s.last_exit}), see journalctl -u portfolio-fetcher-trigger`);
     }
-    done('no new data after 10 minutes');
-  } catch (err) { done('failed: ' + err); }
+    fetchDone('no new data after 10 minutes');
+  } catch (err) { fetchDone('failed: ' + err); }
+}
+fetchBtn.onclick = async () => {
+  fetchBtn.disabled = true; fetchMsg.textContent = 'fetching…';
+  try {
+    const r = await fetch('/fetch', {method: 'POST', headers: {'X-Requested-With': 'fetch'}});
+    if (r.status !== 202 && r.status !== 409) return fetchDone('failed: ' + ((await r.json()).error || r.status));
+  } catch (err) { return fetchDone('failed: ' + err); }
+  fetchPoll(fetchBtn.dataset.last);
 };
+// a page that started a fetch and reloaded (a watchlist add) leaves the ingest it saw: wait on, unless it is in
+const fetchPending = sessionStorage.getItem('fetchPending');
+sessionStorage.removeItem('fetchPending');
+if (fetchPending !== null && fetchPending === fetchBtn.dataset.last) fetchPoll(fetchPending);
 </script>{% endif %}</body></html>
