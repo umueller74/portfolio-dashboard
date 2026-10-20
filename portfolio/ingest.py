@@ -74,7 +74,7 @@ def require_token(request: Request, authorization: str = Header(default="")):
 @router.post("/ingest", dependencies=[Depends(require_token)])
 async def ingest(body: IngestIn, request: Request, tasks: BackgroundTasks):
     conn = request.app.state.conn
-    day = services._day(body.fetched_at)  # Berlin day of the fetch: `watch_since` and the 3-month clock
+    day = services._day(body.fetched_at)  # Berlin day of the fetch: today for the 3-month clock
     with conn:
         for t in body.trades:
             conn.execute(
@@ -112,7 +112,7 @@ async def ingest(body: IngestIn, request: Request, tasks: BackgroundTasks):
             conn.execute("delete from watchlist")
             conn.executemany("insert or replace into watchlist(isin,name,type) values(?,?,?)",
                              [(w.isin, w.name, w.type) for w in body.watchlist])
-            conn.execute("insert or ignore into meta(key,value) values('watch_since',?)", (day.isoformat(),))
+            conn.execute("insert or ignore into meta(key,value) values('watch_since',?)", (_utc(body.fetched_at),))
     if body.watchlist is not None:
         watch.reconcile(conn, day)
     # after the response, in the threadpool so slow calls never block requests: first older closes for ETFs

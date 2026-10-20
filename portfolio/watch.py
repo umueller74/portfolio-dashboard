@@ -5,11 +5,13 @@ before its next fetch; the list it then sends confirms them. `watch_auto` keeps 
   pending_add    -> added (seen on the list)
   added          -> pending_remove (3 months after the sell-out) | done (the user removed it)
   pending_remove -> done (gone from the list)
-An ISIN already on the list at its sell-out is the user's own: `done` at once, never touched. Sell-outs
-before `watch_since` (the first fetch that read the list) are ignored, so the release writes nothing.
-A new buy deletes the row; the next sell-out (a new day) starts over."""
+An ISIN already on the list at its sell-out is the user's own: `done` at once, never touched. Only sell-outs
+whose last trade is after `watch_since` (the instant of the first fetch that read the list) count, so the
+release writes nothing. While an ISIN is held again, a pending add is cancelled and a `done` row dropped,
+but an entry the dashboard added stays its own (`pending_remove` back to `added`, the clock paused); its next
+sell-out restarts the 3 months (`added` again, or `pending_add` if the user removed it meanwhile)."""
 import calendar
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from portfolio import services
@@ -24,27 +26,30 @@ def plus_months(d: date, n: int) -> date:
     return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
 
 
-def _held_and_sellouts(conn) -> tuple[set[str], dict[str, date]]:
+def _held_and_sellouts(conn) -> tuple[set[str], dict[str, datetime]]:
+    """Held ISINs, and ISIN -> time of the last trade for the sold-out ones. Raises OversellError."""
     trades = services.load_trades(conn)
-    lots, _ = replay(trades)  # raises OversellError
+    lots, _ = replay(trades)
     left = {t.isin: Decimal(0) for t in trades}
     for lot in lots:
         left[lot.trade.isin] += lot.remaining
-    last = {t.isin: services._day(t.executed_at) for t in trades}  # sorted by time: the last one wins
+    last: dict[str, datetime] = {}
+    for t in trades:
+        last[t.isin] = max(last.get(t.isin, t.executed_at), t.executed_at)
     return {i for i, q in left.items() if q > 0}, {i: last[i] for i, q in left.items() if q == 0}
 
 
 def sellouts(conn) -> dict[str, date]:
     """ISIN -> Berlin day of its last trade, for every traded ISIN with nothing left."""
     try:
-        return _held_and_sellouts(conn)[1]
+        return {i: services._day(at) for i, at in _held_and_sellouts(conn)[1].items()}
     except OversellError:
         return {}
 
 
-def _since(conn) -> date | None:
+def _since(conn) -> datetime | None:
     row = conn.execute("select value from meta where key='watch_since'").fetchone()
-    return date.fromisoformat(row[0]) if row else None
+    return datetime.fromisoformat(row[0]) if row else None
 
 
 def reconcile(conn, today: date) -> None:
@@ -55,17 +60,28 @@ def reconcile(conn, today: date) -> None:
         return  # broken trade data: change nothing on the user's list
     on = {r[0] for r in conn.execute("select isin from watchlist")}
     rows = {r["isin"]: (r["sold_on"], r["state"]) for r in conn.execute("select * from watch_auto")}
+
+    def put(isin, sold_on, state):
+        rows[isin] = (sold_on, state)
+        conn.execute("insert or replace into watch_auto(isin,sold_on,state) values(?,?,?)", (isin, sold_on, state))
+
     with conn:
         for isin in held & rows.keys():
-            conn.execute("delete from watch_auto where isin=?", (isin,))
-            del rows[isin]
-        for isin, day in sold.items():
-            if since is None or day < since or (isin in rows and rows[isin][0] == day.isoformat()):
+            sold_on, st = rows[isin]
+            if st in ("pending_add", "done"):
+                conn.execute("delete from watch_auto where isin=?", (isin,))
+                del rows[isin]
+            elif st == "pending_remove":
+                put(isin, sold_on, "added")
+        for isin, at in sold.items():
+            day = services._day(at).isoformat()
+            if since is None or at <= since or (isin in rows and rows[isin][0] == day):
                 continue
-            rows[isin] = (day.isoformat(), "done" if isin in on else "pending_add")
-            conn.execute("insert or replace into watch_auto(isin,sold_on,state) values(?,?,?)",
-                         (isin, *rows[isin]))
+            ours = isin in rows and rows[isin][1] in ("added", "pending_remove")  # rebuy of our own entry
+            put(isin, day, ("added" if ours else "done") if isin in on else "pending_add")
         for isin, (sold_on, st) in rows.items():
+            if isin in held:
+                continue
             new = st
             if st == "pending_add" and isin in on:
                 new = "added"
