@@ -239,7 +239,7 @@ async def etf_detail(request: Request, isin: str):
     return templates.TemplateResponse(request, "etf_detail.html", _ctx(request, isin=isin, d=detail))
 
 
-# "Fetch now": not under /api, so the page's basicAuth guards it; the header keeps cross-site forms out
+# "Fetch now": a page route, not under /api (the host is LAN-only); the header keeps cross-site forms out
 @router.post("/fetch")
 def fetch_now(request: Request, x_requested_with: str = Header(default="")):
     trigger = request.app.state.trigger

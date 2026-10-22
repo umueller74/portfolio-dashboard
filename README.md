@@ -39,7 +39,7 @@ Its title shows the price's change over the selected range, from the range's fir
 a dashed line marks that first price, and the prices (line and dots) above it are green, those below red.
 
 Fetch now: with `FETCH_TRIGGER_URL` set (the fetcher host's listener, e.g. `http://raspi2:8770/fetch`), the page shows
-a "Fetch now" button. It posts to `/fetch` (behind the page's basicAuth, not `/api`), the app calls the listener with
+a "Fetch now" button. It posts to `/fetch` (a page route, not `/api`), the app calls the listener with
 the ingest token, and the page polls `GET /fetch` until a newer ingest has arrived, then reloads. The listener,
 `fetcher/trigger.py` (standard library, env `INGEST_TOKEN`, `FETCH_CMD`, `TRIGGER_PORT` default 8770), runs at most
 one `FETCH_CMD` at a time and reports its exit code; a start while one runs queues one follow-up run (202 "queued"),
